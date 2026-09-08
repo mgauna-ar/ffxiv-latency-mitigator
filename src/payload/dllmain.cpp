@@ -103,7 +103,11 @@ DWORD WINAPI PayloadMain(LPVOID module_handle) {
             return 0;
         }
 
-        // 5. Main payload lifecycle loop - exit if shutdown requested OR loader disconnects
+        // 5. Start background worker threads (reader & writer)
+        mitigator::payload::log_debug("PayloadMain: starting background worker threads.");
+        ipc_client.start_worker_threads();
+
+        // 6. Main payload lifecycle loop - exit if shutdown requested OR loader disconnects
         mitigator::payload::log_debug("PayloadMain: entering main lifecycle loop.");
         while (!g_shutdown_requested.load() && ipc_client.is_connected()) {
             std::this_thread::sleep_for(LIFECYCLE_POLL_INTERVAL);

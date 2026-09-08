@@ -57,6 +57,7 @@ private:
 
     [[maybe_unused]] const char* m_pipe_name;
     [[maybe_unused]] void* m_pipe_handle{nullptr}; // HANDLE
+    [[maybe_unused]] void* m_stop_event{nullptr};  // HANDLE
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_connected{false};
     std::atomic<bool> m_status_received{false};

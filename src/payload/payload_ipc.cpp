@@ -30,6 +30,11 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
     HANDLE hPipe = INVALID_HANDLE_VALUE;
     DWORD last_logged_err = 0;
 
+    m_stop_event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!m_stop_event) {
+        return false;
+    }
+
     while (true) {
         hPipe = CreateFileA(
             m_pipe_name,
@@ -37,7 +42,7 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
             0,
             nullptr,
             OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
+            FILE_FLAG_OVERLAPPED,
             nullptr
         );
 
@@ -59,6 +64,10 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
 
         if (elapsed_ms >= timeout_ms) {
             log_debug("PayloadIpcClient::connect: timeout expired (" + std::to_string(timeout_ms) + "ms), aborting.");
+            if (m_stop_event) {
+                CloseHandle(static_cast<HANDLE>(m_stop_event));
+                m_stop_event = nullptr;
+            }
             return false;
         }
 
@@ -79,6 +88,10 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         const DWORD err = GetLastError();
         log_debug("PayloadIpcClient::connect: SetNamedPipeHandleState failed, Win32 Error: " + std::to_string(err));
         CloseHandle(hPipe);
+        if (m_stop_event) {
+            CloseHandle(static_cast<HANDLE>(m_stop_event));
+            m_stop_event = nullptr;
+        }
         return false;
     }
 
@@ -87,12 +100,21 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
     m_connected = true;
     m_running = true;
 
-    m_reader_thread = std::thread(&PayloadIpcClient::reader_thread_func, this);
-    m_writer_thread = std::thread(&PayloadIpcClient::writer_thread_func, this);
     return true;
 #else
     (void)timeout_ms;
     return false;
+#endif
+}
+
+void PayloadIpcClient::start_worker_threads() {
+#if defined(_WIN32)
+    if (!m_reader_thread.joinable()) {
+        m_reader_thread = std::thread(&PayloadIpcClient::reader_thread_func, this);
+    }
+    if (!m_writer_thread.joinable()) {
+        m_writer_thread = std::thread(&PayloadIpcClient::writer_thread_func, this);
+    }
 #endif
 }
 
@@ -101,14 +123,20 @@ void PayloadIpcClient::disconnect() {
     m_queue_cv.notify_all();
 
 #if defined(_WIN32)
+    if (m_stop_event) {
+        SetEvent(static_cast<HANDLE>(m_stop_event));
+    }
+
     // 1. Drain remaining queued telemetry packets on writer thread before closing the handle
     if (m_writer_thread.joinable()) {
         m_writer_thread.join();
     }
 
-    // 2. Cancel any blocking synchronous ReadFile on reader thread
+    // 2. Cancel any pending overlapped read on reader thread
     if (m_reader_thread.joinable()) {
-        CancelSynchronousIo(static_cast<HANDLE>(m_reader_thread.native_handle()));
+        if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
+            CancelIoEx(static_cast<HANDLE>(m_pipe_handle), nullptr);
+        }
         m_reader_thread.join();
     }
 
@@ -119,6 +147,10 @@ void PayloadIpcClient::disconnect() {
             CloseHandle(static_cast<HANDLE>(m_pipe_handle));
             m_pipe_handle = nullptr;
         }
+    }
+    if (m_stop_event) {
+        CloseHandle(static_cast<HANDLE>(m_stop_event));
+        m_stop_event = nullptr;
     }
     m_connected = false;
 #endif
@@ -157,21 +189,27 @@ bool PayloadIpcClient::send_status(const ipc::StatusPayload& payload) {
     auto buffer = ipc::serialize_status(payload);
 
 #if defined(_WIN32)
-    // Synchronously send status packet so loader immediately receives
-    // handshake and diagnostic reports without depending on writer thread scheduling.
-    // Note: Do NOT call FlushFileBuffers on Named Pipe client handles as it blocks indefinitely
-    // awaiting explicit server-side drain acknowledgment.
+    // Synchronously send status packet via overlapped I/O so loader immediately receives
+    // handshake without depending on writer thread scheduling or blocking on kernel mutexes.
     std::lock_guard<std::mutex> lock(m_send_mutex);
     if (!m_pipe_handle || m_pipe_handle == INVALID_HANDLE_VALUE) return false;
 
+    OVERLAPPED ov_write{};
+    ov_write.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!ov_write.hEvent) return false;
+
     DWORD written = 0;
-    const BOOL ok = WriteFile(
+    BOOL ok = WriteFile(
         static_cast<HANDLE>(m_pipe_handle),
         buffer.data(),
         static_cast<DWORD>(buffer.size()),
         &written,
-        nullptr
+        &ov_write
     );
+    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+        ok = GetOverlappedResult(static_cast<HANDLE>(m_pipe_handle), &ov_write, &written, TRUE);
+    }
+    CloseHandle(ov_write.hEvent);
     log_debug("PayloadIpcClient::send_status: WriteFile ok=" + std::to_string(ok) +
               ", written=" + std::to_string(written) + "/" + std::to_string(buffer.size()));
     return (ok && written == buffer.size());
@@ -207,17 +245,25 @@ void PayloadIpcClient::writer_thread_func() {
         if (!packet.empty()) {
             std::lock_guard<std::mutex> lock(m_send_mutex);
             if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
-                DWORD written = 0;
-                const BOOL ok = WriteFile(
-                    static_cast<HANDLE>(m_pipe_handle),
-                    packet.data(),
-                    static_cast<DWORD>(packet.size()),
-                    &written,
-                    nullptr
-                );
-                if (!ok) {
-                    m_connected = false;
-                    break;
+                OVERLAPPED ov_write{};
+                ov_write.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+                if (ov_write.hEvent) {
+                    DWORD written = 0;
+                    BOOL ok = WriteFile(
+                        static_cast<HANDLE>(m_pipe_handle),
+                        packet.data(),
+                        static_cast<DWORD>(packet.size()),
+                        &written,
+                        &ov_write
+                    );
+                    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+                        ok = GetOverlappedResult(static_cast<HANDLE>(m_pipe_handle), &ov_write, &written, TRUE);
+                    }
+                    CloseHandle(ov_write.hEvent);
+                    if (!ok) {
+                        m_connected = false;
+                        break;
+                    }
                 }
             }
         }
@@ -229,19 +275,44 @@ void PayloadIpcClient::reader_thread_func() {
 #if defined(_WIN32)
     constexpr size_t IPC_READ_BUFFER_SIZE = 1024;
     std::vector<uint8_t> buffer(IPC_READ_BUFFER_SIZE);
+    const auto h_stop = static_cast<HANDLE>(m_stop_event);
+
+    OVERLAPPED ov_read{};
+    ov_read.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!ov_read.hEvent) {
+        m_connected = false;
+        return;
+    }
 
     while (m_running.load()) {
+        ResetEvent(ov_read.hEvent);
         DWORD bytes_read = 0;
         BOOL ok = ReadFile(
             static_cast<HANDLE>(m_pipe_handle),
             buffer.data(),
             static_cast<DWORD>(buffer.size()),
             &bytes_read,
-            nullptr
+            &ov_read
         );
 
+        if (!ok) {
+            const DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                HANDLE wait_events[2] = { ov_read.hEvent, h_stop };
+                const DWORD wait_res = WaitForMultipleObjects(2, wait_events, FALSE, INFINITE);
+                if (wait_res == WAIT_OBJECT_0) {
+                    ok = GetOverlappedResult(static_cast<HANDLE>(m_pipe_handle), &ov_read, &bytes_read, FALSE);
+                } else {
+                    CancelIoEx(static_cast<HANDLE>(m_pipe_handle), &ov_read);
+                    break;
+                }
+            } else {
+                // Pipe broken or disconnected
+                break;
+            }
+        }
+
         if (!ok || bytes_read == 0) {
-            // Pipe broken or disconnected
             m_connected = false;
             break;
         }
@@ -260,6 +331,9 @@ void PayloadIpcClient::reader_thread_func() {
             }
         }
     }
+
+    CloseHandle(ov_read.hEvent);
+    m_connected = false;
 #endif
 }
 

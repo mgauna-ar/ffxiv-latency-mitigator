@@ -61,9 +61,15 @@ bool LoaderIpcServer::start() {
 
     sa.lpSecurityDescriptor = &sd;
 
+    m_stop_event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!m_stop_event) {
+        if (p_ml_sd) LocalFree(p_ml_sd);
+        return false;
+    }
+
     HANDLE h_pipe = CreateNamedPipeA(
         m_pipe_name,
-        PIPE_ACCESS_DUPLEX,
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
         PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
         PIPE_UNLIMITED_INSTANCES,
         PIPE_BUFFER_SIZE,
@@ -82,7 +88,7 @@ bool LoaderIpcServer::start() {
 
         h_pipe = CreateNamedPipeA(
             m_pipe_name,
-            PIPE_ACCESS_DUPLEX,
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
             PIPE_UNLIMITED_INSTANCES,
             PIPE_BUFFER_SIZE,
@@ -97,6 +103,10 @@ bool LoaderIpcServer::start() {
     }
 
     if (h_pipe == INVALID_HANDLE_VALUE) {
+        if (m_stop_event) {
+            CloseHandle(static_cast<HANDLE>(m_stop_event));
+            m_stop_event = nullptr;
+        }
         return false;
     }
 
@@ -116,25 +126,14 @@ void LoaderIpcServer::stop() {
     m_status_received = false;
 
 #if defined(_WIN32)
-    // If the worker thread is blocking in ConnectNamedPipe, wake it up with a dummy client connection
-    if (m_pipe_name && m_worker_thread.joinable()) {
-        HANDLE h_wake = CreateFileA(
-            m_pipe_name,
-            GENERIC_READ | GENERIC_WRITE,
-            0,
-            nullptr,
-            OPEN_EXISTING,
-            0,
-            nullptr
-        );
-        if (h_wake != INVALID_HANDLE_VALUE) {
-            CloseHandle(h_wake);
-        }
+    if (m_stop_event) {
+        SetEvent(static_cast<HANDLE>(m_stop_event));
     }
 
     {
         std::lock_guard<std::mutex> lock(m_send_mutex);
         if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
+            CancelIoEx(static_cast<HANDLE>(m_pipe_handle), nullptr);
             DisconnectNamedPipe(static_cast<HANDLE>(m_pipe_handle));
             CloseHandle(static_cast<HANDLE>(m_pipe_handle));
             m_pipe_handle = nullptr;
@@ -145,6 +144,13 @@ void LoaderIpcServer::stop() {
     if (m_worker_thread.joinable()) {
         m_worker_thread.join();
     }
+
+#if defined(_WIN32)
+    if (m_stop_event) {
+        CloseHandle(static_cast<HANDLE>(m_stop_event));
+        m_stop_event = nullptr;
+    }
+#endif
 }
 
 bool LoaderIpcServer::send_command(const ipc::CommandPayload& cmd) {
@@ -156,14 +162,22 @@ bool LoaderIpcServer::send_command(const ipc::CommandPayload& cmd) {
     std::lock_guard<std::mutex> lock(m_send_mutex);
     if (!m_pipe_handle || m_pipe_handle == INVALID_HANDLE_VALUE) return false;
 
+    OVERLAPPED ov_write{};
+    ov_write.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!ov_write.hEvent) return false;
+
     DWORD written = 0;
-    const BOOL ok = WriteFile(
+    BOOL ok = WriteFile(
         static_cast<HANDLE>(m_pipe_handle),
         buffer.data(),
         static_cast<DWORD>(buffer.size()),
         &written,
-        nullptr
+        &ov_write
     );
+    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+        ok = GetOverlappedResult(static_cast<HANDLE>(m_pipe_handle), &ov_write, &written, TRUE);
+    }
+    CloseHandle(ov_write.hEvent);
     return (ok && written == buffer.size());
 #else
     (void)buffer;
@@ -214,12 +228,36 @@ bool LoaderIpcServer::reset_stats() {
 void LoaderIpcServer::server_worker_thread() {
 #if defined(_WIN32)
     const auto h_pipe = static_cast<HANDLE>(m_pipe_handle);
+    const auto h_stop = static_cast<HANDLE>(m_stop_event);
 
-    // Wait for the injected DLL to connect to our named pipe
-    const BOOL client_connected = ConnectNamedPipe(h_pipe, nullptr) ?
-        TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+    OVERLAPPED ov_connect{};
+    ov_connect.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!ov_connect.hEvent) {
+        m_running = false;
+        return;
+    }
 
+    // Wait for the injected DLL to connect to our named pipe asynchronously
+    BOOL client_connected = ConnectNamedPipe(h_pipe, &ov_connect);
     if (!client_connected) {
+        const DWORD err = GetLastError();
+        if (err == ERROR_PIPE_CONNECTED) {
+            client_connected = TRUE;
+        } else if (err == ERROR_IO_PENDING) {
+            HANDLE wait_events[2] = { ov_connect.hEvent, h_stop };
+            const DWORD wait_res = WaitForMultipleObjects(2, wait_events, FALSE, INFINITE);
+            if (wait_res == WAIT_OBJECT_0) {
+                DWORD unused = 0;
+                client_connected = GetOverlappedResult(h_pipe, &ov_connect, &unused, FALSE);
+            } else {
+                CancelIoEx(h_pipe, &ov_connect);
+                client_connected = FALSE;
+            }
+        }
+    }
+    CloseHandle(ov_connect.hEvent);
+
+    if (!client_connected || !m_running.load()) {
         m_running = false;
         return;
     }
@@ -227,19 +265,43 @@ void LoaderIpcServer::server_worker_thread() {
     m_connected = true;
     std::vector<uint8_t> buffer(IPC_READ_BUFFER_SIZE);
 
+    OVERLAPPED ov_read{};
+    ov_read.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!ov_read.hEvent) {
+        m_running = false;
+        m_connected = false;
+        return;
+    }
+
     while (m_running.load()) {
+        ResetEvent(ov_read.hEvent);
         DWORD bytes_read = 0;
         BOOL ok = ReadFile(
             h_pipe,
             buffer.data(),
             static_cast<DWORD>(buffer.size()),
             &bytes_read,
-            nullptr
+            &ov_read
         );
 
+        if (!ok) {
+            const DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                HANDLE wait_events[2] = { ov_read.hEvent, h_stop };
+                const DWORD wait_res = WaitForMultipleObjects(2, wait_events, FALSE, INFINITE);
+                if (wait_res == WAIT_OBJECT_0) {
+                    ok = GetOverlappedResult(h_pipe, &ov_read, &bytes_read, FALSE);
+                } else {
+                    CancelIoEx(h_pipe, &ov_read);
+                    break;
+                }
+            } else {
+                // Client closed pipe or unhooked
+                break;
+            }
+        }
+
         if (!ok || bytes_read == 0) {
-            // Client closed connection or unhooked
-            m_connected = false;
             break;
         }
 
@@ -271,6 +333,7 @@ void LoaderIpcServer::server_worker_thread() {
         }
     }
 
+    CloseHandle(ov_read.hEvent);
     m_connected = false;
 #endif
 }

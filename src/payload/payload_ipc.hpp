@@ -37,6 +37,9 @@ public:
     /// Enqueues a status packet to be sent non-blockingly to the loader.
     bool send_status(const ipc::StatusPayload& payload);
 
+    /// Starts reader and writer worker threads after initial handshake.
+    void start_worker_threads();
+
     /// Sets callback invoked when a command is received from the loader.
     void set_command_handler(CommandHandler handler);
 
@@ -50,6 +53,7 @@ private:
 
     [[maybe_unused]] const char* m_pipe_name;
     [[maybe_unused]] void* m_pipe_handle{nullptr}; // HANDLE
+    [[maybe_unused]] void* m_stop_event{nullptr};  // HANDLE
     std::atomic<bool> m_connected{false};
     std::atomic<bool> m_running{false};
     std::thread m_reader_thread;
