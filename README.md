@@ -50,10 +50,10 @@ When a server action effect arrives:
 1. Calculate measured RTT: $\text{RTT} = t_{\text{effect}} - t_{\text{request}}$
 2. Update rolling exponential moving average (EMA) and moving median.
 3. Compute mitigation delay:
-   $$\Delta = \max(0,\ \text{RTT} - \tau_{\text{target}}) + \text{margin}$$
+   $$\Delta = \max(0,\ \text{RTT} - \tau_{\text{target}} - \text{margin})$$
 4. Calculate adjusted animation lock:
-   $$L_{\text{adjusted}} = \max\Big(L_{\text{original}} - \Delta,\ L_{\text{min\_floor}}\Big)$$
-5. **Anti-Cheat Guardrail**: $L_{\text{min\_floor}}$ enforces a hard floor (default 25ms - 40ms) to prevent setting animation lock to 0ms or negative values, protecting against server-side frequency anomaly detection.
+   $$L_{\text{adjusted}} = \max\Big(L_{\text{original}} - \Delta,\ L_{\text{floor}}\Big)$$
+5. **Anti-Cheat Guardrail**: $L_{\text{floor}}$ enforces a hard floor (default 25ms - 40ms) to prevent setting animation lock to 0ms or negative values, protecting against server-side frequency anomaly detection.
 
 ## Architecture & Development
 
