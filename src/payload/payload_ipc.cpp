@@ -1,4 +1,6 @@
 #include "payload/payload_ipc.hpp"
+#include <chrono>
+#include <algorithm>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -22,27 +24,50 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         return true;
     }
 
-    if (!WaitNamedPipeA(m_pipe_name, timeout_ms)) {
-        return false;
-    }
+    const auto start_time = std::chrono::steady_clock::now();
+    HANDLE hPipe = INVALID_HANDLE_VALUE;
 
-    HANDLE hPipe = CreateFileA(
-        m_pipe_name,
-        GENERIC_READ | GENERIC_WRITE,
-        0,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr
-    );
+    while (true) {
+        hPipe = CreateFileA(
+            m_pipe_name,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr
+        );
 
-    if (hPipe == INVALID_HANDLE_VALUE) {
-        return false;
+        if (hPipe != INVALID_HANDLE_VALUE) {
+            break;
+        }
+
+        const DWORD err = GetLastError();
+        const auto elapsed_ms = static_cast<uint32_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start_time
+            ).count()
+        );
+
+        if (elapsed_ms >= timeout_ms) {
+            return false;
+        }
+
+        const uint32_t remaining_ms = timeout_ms - elapsed_ms;
+
+        if (err == ERROR_PIPE_BUSY) {
+            WaitNamedPipeA(m_pipe_name, (std::min)(remaining_ms, 200u));
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
     }
 
     // Set message-read mode
     DWORD mode = PIPE_READMODE_MESSAGE;
-    SetNamedPipeHandleState(hPipe, &mode, nullptr, nullptr);
+    if (!SetNamedPipeHandleState(hPipe, &mode, nullptr, nullptr)) {
+        CloseHandle(hPipe);
+        return false;
+    }
 
     m_pipe_handle = hPipe;
     m_connected = true;
@@ -59,34 +84,31 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
 
 void PayloadIpcClient::disconnect() {
     m_running = false;
-    m_connected = false;
     m_queue_cv.notify_all();
 
 #if defined(_WIN32)
-    // Abort any blocking synchronous WriteFile or ReadFile on worker threads
-    // before acquiring m_send_mutex, preventing deadlock if writer is blocked on saturated pipe
+    // 1. Drain remaining queued telemetry packets on writer thread before closing the handle
     if (m_writer_thread.joinable()) {
-        CancelSynchronousIo(static_cast<HANDLE>(m_writer_thread.native_handle()));
-    }
-    if (m_reader_thread.joinable()) {
-        CancelSynchronousIo(static_cast<HANDLE>(m_reader_thread.native_handle()));
+        m_writer_thread.join();
     }
 
+    // 2. Cancel any blocking synchronous ReadFile on reader thread
+    if (m_reader_thread.joinable()) {
+        CancelSynchronousIo(static_cast<HANDLE>(m_reader_thread.native_handle()));
+        m_reader_thread.join();
+    }
+
+    // 3. Flush and close pipe handle safely under m_send_mutex
     {
         std::lock_guard<std::mutex> lock(m_send_mutex);
         if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
+            FlushFileBuffers(static_cast<HANDLE>(m_pipe_handle));
             CloseHandle(static_cast<HANDLE>(m_pipe_handle));
             m_pipe_handle = nullptr;
         }
     }
+    m_connected = false;
 #endif
-
-    if (m_writer_thread.joinable()) {
-        m_writer_thread.join();
-    }
-    if (m_reader_thread.joinable()) {
-        m_reader_thread.join();
-    }
 
     // Clear residual queue
     std::lock_guard<std::mutex> lock(m_queue_mutex);
@@ -120,7 +142,29 @@ bool PayloadIpcClient::send_telemetry(const ipc::TelemetryPayload& payload) {
 bool PayloadIpcClient::send_status(const ipc::StatusPayload& payload) {
     if (!m_connected.load()) return false;
     auto buffer = ipc::serialize_status(payload);
+
+#if defined(_WIN32)
+    // Synchronously send and flush status packet so loader immediately receives
+    // handshake and diagnostic reports without depending on writer thread scheduling
+    std::lock_guard<std::mutex> lock(m_send_mutex);
+    if (!m_pipe_handle || m_pipe_handle == INVALID_HANDLE_VALUE) return false;
+
+    DWORD written = 0;
+    const BOOL ok = WriteFile(
+        static_cast<HANDLE>(m_pipe_handle),
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()),
+        &written,
+        nullptr
+    );
+    if (ok && written == buffer.size()) {
+        FlushFileBuffers(static_cast<HANDLE>(m_pipe_handle));
+        return true;
+    }
+    return false;
+#else
     return enqueue_packet(std::move(buffer));
+#endif
 }
 
 void PayloadIpcClient::set_command_handler(CommandHandler handler) {
@@ -129,7 +173,7 @@ void PayloadIpcClient::set_command_handler(CommandHandler handler) {
 
 void PayloadIpcClient::writer_thread_func() {
 #if defined(_WIN32)
-    while (m_running.load()) {
+    while (true) {
         std::vector<uint8_t> packet;
         {
             std::unique_lock<std::mutex> lock(m_queue_mutex);
@@ -147,7 +191,7 @@ void PayloadIpcClient::writer_thread_func() {
             }
         }
 
-        if (!packet.empty() && m_connected.load()) {
+        if (!packet.empty()) {
             std::lock_guard<std::mutex> lock(m_send_mutex);
             if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
                 DWORD written = 0;
@@ -160,6 +204,7 @@ void PayloadIpcClient::writer_thread_func() {
                 );
                 if (!ok) {
                     m_connected = false;
+                    break;
                 }
             }
         }

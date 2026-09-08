@@ -321,7 +321,9 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     s_mitigator.store(mitigator, std::memory_order_release);
     s_ipc.store(ipc, std::memory_order_release);
 
-    if (MH_Initialize() != MH_OK) {
+    const auto mh_init = MH_Initialize();
+    if (mh_init != MH_OK && mh_init != MH_ERROR_ALREADY_INITIALIZED) {
+        m_last_error = "MinHook initialization failed";
         return false;
     }
 
@@ -414,7 +416,20 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         MH_EnableHook(MH_ALL_HOOKS);
         m_hook_count = hooked;
         m_installed = true;
+        m_last_error = "OK";
         return true;
+    }
+
+    if (addr_use_action == 0 && addr_recv_effect == 0) {
+        m_last_error = "Signatures not found: UseActionLocation & ReceiveActionEffect";
+    } else if (addr_use_action == 0) {
+        m_last_error = "Signature not found: UseActionLocation";
+    } else if (addr_recv_effect == 0) {
+        m_last_error = "Signature not found: ReceiveActionEffect";
+    } else if (hooked < game::definitions::MIN_REQUIRED_PRIMARY_HOOKS) {
+        m_last_error = "MinHook failed to install primary hooks";
+    } else {
+        m_last_error = "Hook installation failed";
     }
 
     MH_Uninitialize();

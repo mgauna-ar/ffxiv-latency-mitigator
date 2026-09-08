@@ -59,6 +59,11 @@ DWORD WINAPI PayloadMain(LPVOID module_handle) {
 
         // Connect to loader Named Pipe
         const bool ipc_ok = ipc_client.connect(IPC_CONNECT_TIMEOUT_MS);
+        if (!ipc_ok) {
+            // Cannot communicate with loader, abort cleanly to avoid running unmonitored
+            FreeLibraryAndExitThread(h_module, 0);
+            return 0;
+        }
 
         // 3. Install detours
         const bool hooks_ok = mitigator::payload::HookManager::instance().install(
@@ -67,16 +72,14 @@ DWORD WINAPI PayloadMain(LPVOID module_handle) {
         );
 
         // 4. Report initial status
-        if (ipc_ok) {
-            mitigator::ipc::StatusPayload status{};
-            status.game_pid = GetCurrentProcessId();
-            status.hooks_installed = mitigator::payload::HookManager::instance().active_hook_count();
-            status.version_major = PAYLOAD_VERSION_MAJOR;
-            status.version_minor = PAYLOAD_VERSION_MINOR;
-            const char* msg = hooks_ok ? "Detours installed successfully" : "Signature scan failed: Game update detected";
-            strncpy_s(status.status_message, sizeof(status.status_message), msg, _TRUNCATE);
-            ipc_client.send_status(status);
-        }
+        mitigator::ipc::StatusPayload status{};
+        status.game_pid = GetCurrentProcessId();
+        status.hooks_installed = mitigator::payload::HookManager::instance().active_hook_count();
+        status.version_major = PAYLOAD_VERSION_MAJOR;
+        status.version_minor = PAYLOAD_VERSION_MINOR;
+        const char* msg = hooks_ok ? "Detours installed successfully" : mitigator::payload::HookManager::instance().last_error();
+        strncpy_s(status.status_message, sizeof(status.status_message), msg, _TRUNCATE);
+        ipc_client.send_status(status);
 
         // If hook installation failed (e.g. game patched), abort and self-unload cleanly
         if (!hooks_ok) {

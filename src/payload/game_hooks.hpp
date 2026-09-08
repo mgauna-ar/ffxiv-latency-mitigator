@@ -33,6 +33,9 @@ public:
     /// Returns the number of successfully hooked target functions.
     [[nodiscard]] uint32_t active_hook_count() const { return m_hook_count.load(); }
 
+    /// Returns diagnostic description of the last error or signature mismatch.
+    [[nodiscard]] const char* last_error() const { return m_last_error; }
+
 private:
     HookManager() = default;
     ~HookManager() { uninstall(); }
@@ -42,6 +45,7 @@ private:
 
     std::atomic<bool> m_installed{false};
     std::atomic<uint32_t> m_hook_count{0};
+    const char* m_last_error{"OK"};
 };
 
 } // namespace mitigator::payload

@@ -127,5 +127,5 @@ if(WIN32 OR CYGWIN OR MSYS OR MINGW)
         "${CMAKE_CURRENT_BINARY_DIR}/generated"
     )
 
-    target_link_libraries(ffxiv-mitigator PRIVATE mitigator_core)
+    target_link_libraries(ffxiv-mitigator PRIVATE mitigator_core advapi32)
 endif()

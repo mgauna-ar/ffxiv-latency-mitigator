@@ -5,6 +5,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <sddl.h>
+#pragma comment(lib, "advapi32.lib")
 #endif
 
 namespace mitigator::loader {
@@ -12,7 +14,6 @@ namespace mitigator::loader {
 namespace {
 #if defined(_WIN32)
     constexpr DWORD PIPE_BUFFER_SIZE = 4096;
-    constexpr DWORD PIPE_MAX_INSTANCES = 1;
     constexpr DWORD PIPE_DEFAULT_TIMEOUT_MS = 0;
     constexpr size_t IPC_READ_BUFFER_SIZE = 2048;
 #endif
@@ -31,16 +32,39 @@ bool LoaderIpcServer::start() {
         return true;
     }
 
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    sa.bInheritHandle = FALSE;
+
+    // Discretionary ACL (D) granting Generic All (GA) to Everyone (WD),
+    // and Mandatory Integrity Label (S:(ML)) set to Low (LW) with No-Write-Up policy disabled (NW).
+    // This allows processes running at Medium integrity (e.g. non-elevated game) to connect to
+    // and communicate with a High integrity (Administrator) server, or vice versa.
+    PSECURITY_DESCRIPTOR p_sd = nullptr;
+    const BOOL sddl_ok = ConvertStringSecurityDescriptorToSecurityDescriptorA(
+        "D:(A;;GA;;;WD)S:(ML;;NW;;;LW)",
+        SDDL_REVISION_1,
+        &p_sd,
+        nullptr
+    );
+    if (sddl_ok && p_sd) {
+        sa.lpSecurityDescriptor = p_sd;
+    }
+
     HANDLE h_pipe = CreateNamedPipeA(
         m_pipe_name,
         PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-        PIPE_MAX_INSTANCES,
+        PIPE_UNLIMITED_INSTANCES,
         PIPE_BUFFER_SIZE,
         PIPE_BUFFER_SIZE,
         PIPE_DEFAULT_TIMEOUT_MS,
-        nullptr
+        p_sd ? &sa : nullptr
     );
+
+    if (p_sd) {
+        LocalFree(p_sd);
+    }
 
     if (h_pipe == INVALID_HANDLE_VALUE) {
         return false;
@@ -59,6 +83,7 @@ bool LoaderIpcServer::start() {
 void LoaderIpcServer::stop() {
     m_running = false;
     m_connected = false;
+    m_status_received = false;
 
 #if defined(_WIN32)
     // If the worker thread is blocking in ConnectNamedPipe, wake it up with a dummy client connection
@@ -203,8 +228,15 @@ void LoaderIpcServer::server_worker_thread() {
             }
         } else if (hdr->type == static_cast<uint16_t>(ipc::PacketType::Status)) {
             const auto status = ipc::deserialize_status(payload_span);
-            if (status.has_value() && m_on_status) {
-                m_on_status(*status);
+            if (status.has_value()) {
+                {
+                    std::lock_guard<std::mutex> lock(m_status_mutex);
+                    m_last_status = *status;
+                }
+                m_status_received = true;
+                if (m_on_status) {
+                    m_on_status(*status);
+                }
             }
         }
     }

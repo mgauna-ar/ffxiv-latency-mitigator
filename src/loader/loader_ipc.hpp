@@ -5,6 +5,7 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <optional>
 
 namespace mitigator::loader {
 
@@ -45,6 +46,11 @@ public:
 
     [[nodiscard]] bool is_connected() const { return m_connected.load(); }
     [[nodiscard]] bool is_running() const { return m_running.load(); }
+    [[nodiscard]] bool has_received_status() const { return m_status_received.load(); }
+    [[nodiscard]] std::optional<ipc::StatusPayload> last_status() const {
+        std::lock_guard<std::mutex> lock(m_status_mutex);
+        return m_last_status;
+    }
 
 private:
     void server_worker_thread();
@@ -53,8 +59,11 @@ private:
     [[maybe_unused]] void* m_pipe_handle{nullptr}; // HANDLE
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_connected{false};
+    std::atomic<bool> m_status_received{false};
     std::thread m_worker_thread;
     std::mutex m_send_mutex;
+    mutable std::mutex m_status_mutex;
+    std::optional<ipc::StatusPayload> m_last_status;
 
     TelemetryCallback m_on_telemetry;
     StatusCallback m_on_status;

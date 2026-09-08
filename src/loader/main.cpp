@@ -37,7 +37,7 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
 #endif
 
 constexpr size_t MIN_EMBEDDED_PAYLOAD_SIZE = 100;
-constexpr int MAX_HANDSHAKE_WAIT_TICKS = 50;
+constexpr int MAX_HANDSHAKE_WAIT_TICKS = 150;
 constexpr auto HANDSHAKE_POLL_INTERVAL = std::chrono::milliseconds(100);
 constexpr auto HOTKEY_POLL_INTERVAL = std::chrono::milliseconds(50);
 constexpr auto UNHOOK_DRAIN_DELAY = std::chrono::milliseconds(300);
@@ -130,8 +130,21 @@ int main(int argc, char* argv[]) {
         proc = mitigator::loader::ProcessFinder::wait_for_process();
     }
 
-    if (!proc.has_value() || !proc->handle) {
-        ui.log_status("Game process not found or access denied.", true);
+    if (!proc.has_value()) {
+        ui.log_status("Game process not found.", true);
+        ipc_server.stop();
+        return 1;
+    }
+
+    if (!proc->handle) {
+        ui.log_status(
+            "Access denied opening game process (PID: " + std::to_string(proc->pid) + ").",
+            true
+        );
+        ui.log_status(
+            "FFXIV is running with Administrator privileges. Please re-run ffxiv-mitigator as Administrator (or launch FFXIV via XIVLauncher without Admin).",
+            false
+        );
         ipc_server.stop();
         return 1;
     }
@@ -177,14 +190,38 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[+] Payload successfully injected. Awaiting IPC telemetry handshake...\n";
 
-    // Wait for payload to connect to pipe
+    // Wait for payload to connect to pipe and complete handshake
     int wait_ticks = 0;
-    while (!ipc_server.is_connected() && wait_ticks++ < MAX_HANDSHAKE_WAIT_TICKS && g_keep_running.load()) {
+    while ((!ipc_server.is_connected() || !ipc_server.has_received_status())
+           && wait_ticks++ < MAX_HANDSHAKE_WAIT_TICKS
+           && g_keep_running.load()) {
         std::this_thread::sleep_for(HANDSHAKE_POLL_INTERVAL);
+        if (ipc_server.has_received_status()) {
+            break;
+        }
     }
 
-    if (!ipc_server.is_connected()) {
-        ui.log_status("Handshake timed out. Game may be closing or hooks failed.", true);
+    const auto last_status = ipc_server.last_status();
+    if (last_status.has_value() && last_status->hooks_installed < mitigator::game::definitions::MIN_REQUIRED_PRIMARY_HOOKS) {
+        // Detour installation failed in game; status callback already displayed diagnostic
+        ipc_server.stop();
+#if defined(_WIN32)
+        if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
+#endif
+        return 1;
+    }
+
+    if (!ipc_server.is_connected() || !ipc_server.has_received_status()) {
+        ui.log_status("Handshake timed out. Injected payload did not establish IPC telemetry.", true);
+        ui.log_status("Possible causes:", true);
+        ui.log_status("  1. Privilege mismatch: Ensure both game and mitigator are run with matching privileges (e.g. Run as administrator).", false);
+        ui.log_status("  2. Antivirus or security software blocked remote thread execution.", false);
+        ui.log_status("  3. Third-party overlay or hook conflict.", false);
+        ipc_server.stop();
+#if defined(_WIN32)
+        if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
+#endif
+        return 1;
     }
 
     // Set initial configuration parameters
