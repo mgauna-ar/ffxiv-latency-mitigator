@@ -68,15 +68,28 @@ namespace signatures {
         "48 89 5C 24 ? 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24";
 
     // 3. Spell cast begin: ActionManager::CastBegin
+    // Dawntrail 7.x:
     constexpr std::string_view CAST_BEGIN_PRIMARY =
+        "40 53 57 48 81 EC ? ? ? ? 48 8B FA 8B D1";
+    // Endwalker 6.x fallback:
+    constexpr std::string_view CAST_BEGIN_FALLBACK =
         "40 53 48 83 EC ? 48 8B D9 89 91 ? ? ? ? 89 91";
 
     // 4. Spell cast interrupt/cancel: ActionManager::CastInterrupt
     constexpr std::string_view CAST_INTERRUPT_PRIMARY =
         "48 83 EC ? 48 8B 01 BA ? ? ? ? FF 50";
+    constexpr std::string_view CAST_INTERRUPT_FALLBACK =
+        "48 8B C4 48 83 EC 48 48 89 58 08";
 
-    // 5. ActionManager static pointer reference instruction (MOV rcx, [rip + disp32])
+    // 5. ActionManager static instance resolution instruction
+    // Dawntrail 7.x (FFXIVClientStructs): LEA rcx, [rip + disp32] followed by movss xmm2, [rbx]
     constexpr std::string_view ACTION_MANAGER_INSTANCE_PRIMARY =
+        "48 8D 0D ? ? ? ? F3 0F 10 13";
+    // Dawntrail fallback:
+    constexpr std::string_view ACTION_MANAGER_INSTANCE_FALLBACK =
+        "48 8D 0D ? ? ? ? 88";
+    // Legacy Endwalker 6.x: MOV rcx, [rip + disp32]
+    constexpr std::string_view ACTION_MANAGER_INSTANCE_LEGACY =
         "48 8B 0D ? ? ? ? 48 85 C9 74 ? 48 8B 01 FF 50 ? 48 85 C0";
 } // namespace signatures
 
