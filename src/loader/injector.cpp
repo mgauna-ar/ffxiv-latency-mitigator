@@ -146,11 +146,22 @@ std::wstring DllInjector::write_temp_dll(std::span<const uint8_t> dll_bytes, uin
     std::wstring dll_file_path = std::wstring(temp_dir) + L"ffxiv_mitigator_payload_" +
                                  std::to_wstring(pid) + L"_" + std::to_wstring(now_ms) + L".dll";
 
+    // Initialize an open NULL DACL so the game process can map and read the DLL
+    // regardless of whether game and loader run under different integrity levels.
+    SECURITY_DESCRIPTOR sd{};
+    InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+    SetSecurityDescriptorDacl(&sd, TRUE, nullptr, FALSE);
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    sa.lpSecurityDescriptor = &sd;
+    sa.bInheritHandle = FALSE;
+
     HANDLE h_file = CreateFileW(
         dll_file_path.c_str(),
         GENERIC_WRITE,
         FILE_SHARE_READ,
-        nullptr,
+        &sa,
         CREATE_ALWAYS,
         FILE_ATTRIBUTE_NORMAL,
         nullptr
@@ -168,7 +179,14 @@ std::wstring DllInjector::write_temp_dll(std::span<const uint8_t> dll_bytes, uin
         &written,
         nullptr
     );
+
+    if (ok) {
+        FlushFileBuffers(h_file);
+    }
     CloseHandle(h_file);
+
+    // Brief delay to ensure filesystem cache and filter drivers release any inspection handles
+    Sleep(20);
 
     return (ok && written == dll_bytes.size()) ? dll_file_path : L"";
 #else

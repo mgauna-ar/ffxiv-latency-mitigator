@@ -220,15 +220,31 @@ int main(int argc, char* argv[]) {
     mitigator::loader::DllInjector injector;
     const auto embedded_dll = mitigator::loader::get_embedded_payload();
 
+    // Check if mitigator_payload.dll is present next to the executable
+    std::filesystem::path disk_payload_path;
+#if defined(_WIN32)
+    wchar_t module_file[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, module_file, MAX_PATH) != 0) {
+        const std::filesystem::path exe_dir = std::filesystem::path(module_file).parent_path();
+        const auto candidate = exe_dir / "mitigator_payload.dll";
+        if (std::filesystem::exists(candidate)) {
+            disk_payload_path = candidate;
+        }
+    }
+#endif
+    if (disk_payload_path.empty() && std::filesystem::exists("mitigator_payload.dll")) {
+        disk_payload_path = std::filesystem::absolute("mitigator_payload.dll");
+    }
+
     bool injected = false;
-    if (embedded_dll.size() > MIN_EMBEDDED_PAYLOAD_SIZE) {
+    if (!disk_payload_path.empty()) {
+        std::cout << "[*] Injecting payload from disk: " << disk_payload_path.string() << "...\n";
+        injected = injector.inject_from_file(*proc, disk_payload_path.wstring());
+    } else if (embedded_dll.size() > MIN_EMBEDDED_PAYLOAD_SIZE) {
         std::cout << "[*] Injecting embedded payload (" << embedded_dll.size() << " bytes)...\n";
         injected = injector.inject(*proc, embedded_dll);
     } else {
-        // Fallback: look for mitigator_payload.dll in the current working directory
-        std::cout << "[*] Searching for mitigator_payload.dll on disk...\n";
-        const auto payload_path = std::filesystem::absolute("mitigator_payload.dll");
-        injected = injector.inject_from_file(*proc, payload_path.wstring());
+        ui.log_status("No payload DLL found (neither embedded nor on disk).", true);
     }
 
     if (!injected) {
