@@ -20,7 +20,7 @@ bool ProcessFinder::enable_debug_privilege() {
     }
 
     LUID luid{};
-    if (!LookupPrivilegeValueW(nullptr, SE_DEBUG_NAME, &luid)) {
+    if (!LookupPrivilegeValueW(nullptr, L"SeDebugPrivilege", &luid)) {
         CloseHandle(h_token);
         return false;
     }
