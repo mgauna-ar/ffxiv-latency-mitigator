@@ -1,5 +1,6 @@
 #include "loader/ui_renderer.hpp"
 #include "mitigator/types.hpp"
+#include "mitigator/game_definitions.hpp"
 #include <iostream>
 #include <iomanip>
 
@@ -30,9 +31,9 @@ void UiRenderer::render_header(uint32_t pid, uint32_t hook_count, double target_
               << "===================================================================\n"
               << color::RESET;
 
-    std::cout << color::BOLD << "Target Process: " << color::GREEN << "ffxiv_dx11.exe"
-              << color::RESET << " (PID: " << pid << ")\n";
-    std::cout << color::BOLD << "Active Detours: " << color::GREEN << hook_count << "/4 hooks active\n"
+    std::cout << color::BOLD << "Target Process: " << color::GREEN << game::definitions::DEFAULT_GAME_PROCESS_NAME
+              << color::RESET << " (PID: " << pid << ", Game: " << color::CYAN << game::definitions::SUPPORTED_GAME_VERSION << color::RESET << ")\n";
+    std::cout << color::BOLD << "Active Detours: " << color::GREEN << hook_count << "/" << game::definitions::TOTAL_AVAILABLE_HOOKS << " hooks active\n"
               << color::RESET;
     std::cout << color::BOLD << "Target Ping:    " << color::YELLOW << std::fixed << std::setprecision(1) << target_ping_ms << " ms\n"
               << color::RESET;

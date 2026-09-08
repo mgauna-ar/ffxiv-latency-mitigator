@@ -41,8 +41,27 @@ namespace constants {
     /// Maximum age for generic 0-sequence fallback matches
     constexpr auto GENERIC_FALLBACK_MAX_ELAPSED = std::chrono::milliseconds(1500);
 
+    /// Absolute hard anti-cheat safety limit: never allow setting animation lock floor below this value
+    constexpr double ABSOLUTE_MIN_ANIMATION_LOCK_FLOOR_MS = 20.0;
+
     /// Grace window in seconds after cast completion to allow server packet ack
     constexpr float CAST_COMPLETION_GRACE_WINDOW_SECONDS = 0.1f;
+    /// Base buffer added to dynamic cast grace window in seconds
+    constexpr float CAST_GRACE_BASE_BUFFER_SECONDS = 0.050f;
+    /// Ratio of RTT representing one-way client-to-server or server-to-client latency
+    constexpr double ONE_WAY_LATENCY_RATIO = 0.5;
+
+    /// Minimum samples needed before activating moving median spike rejection
+    constexpr size_t MIN_SAMPLES_FOR_MEDIAN_FILTER = 3;
+    /// Minimum latency deviation tolerance in ms before considering an RTT spike an outlier
+    constexpr double MIN_OUTLIER_TOLERANCE_MS = 50.0;
+    /// Multiplier on measured jitter to calculate outlier rejection threshold
+    constexpr double JITTER_SPIKE_MULTIPLIER = 3.0;
+
+    /// Maximum duration in milliseconds to wait for in-flight detours to drain during unhooking
+    constexpr uint32_t HOOK_DRAIN_TIMEOUT_MS = 2000;
+    /// Polling sleep interval in milliseconds while waiting for detours to drain
+    constexpr uint32_t HOOK_DRAIN_POLL_INTERVAL_MS = 10;
 }
 
 /// Configuration parameters for latency mitigation.

@@ -35,7 +35,8 @@ bool CastTracker::is_casting(TimePoint now, double smoothed_rtt_ms) const {
     // Allow a dynamic grace window after cast completes for server ack scaled to RTT
     const float dynamic_grace = std::max(
         constants::CAST_COMPLETION_GRACE_WINDOW_SECONDS,
-        static_cast<float>(smoothed_rtt_ms / 2000.0) + 0.050f
+        static_cast<float>((smoothed_rtt_ms * constants::ONE_WAY_LATENCY_RATIO) / constants::MS_PER_SECOND)
+            + constants::CAST_GRACE_BASE_BUFFER_SECONDS
     );
     return elapsed < (m_cast_duration_seconds + dynamic_grace);
 }

@@ -12,7 +12,7 @@
 
 namespace mitigator::loader {
 
-std::optional<ProcessInfo> ProcessFinder::find_process(const std::string& process_name) {
+std::optional<ProcessInfo> ProcessFinder::find_process(std::string_view process_name) {
 #if defined(_WIN32)
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
@@ -80,7 +80,7 @@ bool ProcessFinder::is_process_64_bit(void* process_handle) {
 }
 
 std::optional<ProcessInfo> ProcessFinder::wait_for_process(
-    const std::string& process_name,
+    std::string_view process_name,
     uint32_t timeout_seconds
 ) {
     const auto start = std::chrono::steady_clock::now();

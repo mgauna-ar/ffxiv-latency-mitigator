@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <optional>
+#include "mitigator/game_definitions.hpp"
 
 namespace mitigator::loader {
 
@@ -19,14 +21,16 @@ struct ProcessInfo {
 class ProcessFinder {
 public:
     /// Searches for a process with the specified image name (e.g. "ffxiv_dx11.exe").
-    [[nodiscard]] static std::optional<ProcessInfo> find_process(const std::string& process_name = "ffxiv_dx11.exe");
+    [[nodiscard]] static std::optional<ProcessInfo> find_process(
+        std::string_view process_name = game::definitions::DEFAULT_GAME_PROCESS_NAME
+    );
 
     /// Checks if a process handle is 64-bit architecture.
     [[nodiscard]] static bool is_process_64_bit(void* process_handle);
 
     /// Waits until the game process starts or timeout expires (0 = wait indefinitely).
     [[nodiscard]] static std::optional<ProcessInfo> wait_for_process(
-        const std::string& process_name = "ffxiv_dx11.exe",
+        std::string_view process_name = game::definitions::DEFAULT_GAME_PROCESS_NAME,
         uint32_t timeout_seconds = 0
     );
 };

@@ -61,10 +61,13 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
 
     // Use measured RTT, applying moving median spike filter to reject extreme latency anomalies
     double effective_rtt = (measured_rtt > 0.0) ? measured_rtt : res.smoothed_rtt_ms;
-    if (m_rtt_tracker.sample_count() >= 3) {
+    if (m_rtt_tracker.sample_count() >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER) {
         const double median_rtt = m_rtt_tracker.get_median_rtt_ms();
         const double jitter = m_rtt_tracker.get_jitter_ms();
-        const double outlier_threshold = median_rtt + std::max(50.0, 3.0 * jitter);
+        const double outlier_threshold = median_rtt + std::max(
+            constants::MIN_OUTLIER_TOLERANCE_MS,
+            constants::JITTER_SPIKE_MULTIPLIER * jitter
+        );
         if (effective_rtt > outlier_threshold) {
             effective_rtt = median_rtt;
         }
@@ -167,7 +170,7 @@ void AnimationLockMitigator::set_target_ping_ms(double target_ping_ms) {
 
 void AnimationLockMitigator::set_min_animation_lock_ms(double min_lock_ms) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_config.min_animation_lock_ms = std::max(20.0, min_lock_ms);
+    m_config.min_animation_lock_ms = std::max(constants::ABSOLUTE_MIN_ANIMATION_LOCK_FLOOR_MS, min_lock_ms);
 }
 
 SessionStats AnimationLockMitigator::get_session_stats() const {

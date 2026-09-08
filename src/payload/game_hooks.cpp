@@ -1,5 +1,6 @@
 #include "payload/game_hooks.hpp"
 #include "mitigator/game_structures.hpp"
+#include "mitigator/game_definitions.hpp"
 #include "mitigator/sigscan.hpp"
 #include <atomic>
 #include <chrono>
@@ -28,13 +29,6 @@ namespace {
 
 #if defined(_WIN32)
 #define FFXIV_FASTCALL __fastcall
-// Instruction encoding constants for RIP-relative MOV rcx, [rip + disp32] (48 8B 0D [disp32])
-constexpr size_t MOV_RCX_RIP_DISP_OFFSET = 3;
-constexpr size_t MOV_RCX_RIP_INSN_LEN = 7;
-
-// Minimum number of hooks required to perform latency mitigation
-// (UseActionLocation and ReceiveActionEffect are mandatory)
-constexpr uint32_t MIN_REQUIRED_PRIMARY_HOOKS = 2;
 
 // Atomic in-flight detour invocation counter to prevent uninstall race conditions
 std::atomic<int32_t> g_in_flight_detours{0};
@@ -189,7 +183,7 @@ static void DetourReceiveActionEffectProtected(
 
         // Zone-wide action effect isolation:
         // Only mitigate if animation lock was actually increased for local player and is valid
-        if (mgr == nullptr || !(new_lock > old_lock && new_lock > 0.01f && std::isfinite(new_lock))) {
+        if (mgr == nullptr || !(new_lock > old_lock && new_lock > game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS && std::isfinite(new_lock))) {
             return;
         }
 
@@ -334,11 +328,11 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     uint32_t hooked = 0;
 
     // 1. Hook UseActionLocation
-    const auto sig_use_action = memory::Signature::parse("48 89 5C 24 ? 48 89 6C 24 ? 48 89 74 24 ? 57 48 83 EC ? 48 8B F9 41 8B F1");
+    const auto sig_use_action = memory::Signature::parse(game::signatures::USE_ACTION_LOCATION_PRIMARY);
     uintptr_t addr_use_action = memory::scan_module_section(nullptr, sig_use_action);
     if (addr_use_action == 0) {
         // Fallback pattern
-        const auto sig_fallback = memory::Signature::parse("40 53 55 57 41 54 41 57 48 83 EC 60");
+        const auto sig_fallback = memory::Signature::parse(game::signatures::USE_ACTION_LOCATION_FALLBACK);
         addr_use_action = memory::scan_module_section(nullptr, sig_fallback);
     }
 
@@ -353,10 +347,10 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     }
 
     // 2. Hook ReceiveActionEffect
-    const auto sig_recv_effect = memory::Signature::parse("40 55 56 57 41 54 41 55 41 56 48 8D AC 24 ? ? ? ? 48 81 EC ? ? ? ? 48 8B 05");
+    const auto sig_recv_effect = memory::Signature::parse(game::signatures::RECEIVE_ACTION_EFFECT_PRIMARY);
     uintptr_t addr_recv_effect = memory::scan_module_section(nullptr, sig_recv_effect);
     if (addr_recv_effect == 0) {
-        const auto sig_fallback = memory::Signature::parse("48 89 5C 24 ? 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24");
+        const auto sig_fallback = memory::Signature::parse(game::signatures::RECEIVE_ACTION_EFFECT_FALLBACK);
         addr_recv_effect = memory::scan_module_section(nullptr, sig_fallback);
     }
 
@@ -371,7 +365,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     }
 
     // 3. Hook CastBegin
-    const auto sig_cast_begin = memory::Signature::parse("40 53 48 83 EC ? 48 8B D9 89 91 ? ? ? ? 89 91");
+    const auto sig_cast_begin = memory::Signature::parse(game::signatures::CAST_BEGIN_PRIMARY);
     const uintptr_t addr_cast_begin = memory::scan_module_section(nullptr, sig_cast_begin);
     if (addr_cast_begin != 0) {
         if (MH_CreateHook(
@@ -384,7 +378,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     }
 
     // 4. Hook CastInterrupt
-    const auto sig_cast_interrupt = memory::Signature::parse("48 83 EC ? 48 8B 01 BA ? ? ? ? FF 50");
+    const auto sig_cast_interrupt = memory::Signature::parse(game::signatures::CAST_INTERRUPT_PRIMARY);
     const uintptr_t addr_cast_interrupt = memory::scan_module_section(nullptr, sig_cast_interrupt);
     if (addr_cast_interrupt != 0) {
         if (MH_CreateHook(
@@ -397,13 +391,13 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     }
 
     // 5. Attempt initial static pointer acquisition for ActionManager
-    const auto sig_action_mgr = memory::Signature::parse("48 8B 0D ? ? ? ? 48 85 C9 74 ? 48 8B 01 FF 50 ? 48 85 C0");
+    const auto sig_action_mgr = memory::Signature::parse(game::signatures::ACTION_MANAGER_INSTANCE_PRIMARY);
     const uintptr_t addr_action_mgr_insn = memory::scan_module_section(nullptr, sig_action_mgr);
     if (addr_action_mgr_insn != 0) {
         const uintptr_t p_static_mgr = memory::resolve_rip_relative(
             addr_action_mgr_insn,
-            MOV_RCX_RIP_DISP_OFFSET,
-            MOV_RCX_RIP_INSN_LEN
+            game::definitions::ACTION_MGR_RIP_DISP_OFFSET,
+            game::definitions::ACTION_MGR_RIP_INSN_LEN
         );
         if (p_static_mgr != 0) {
             auto pp_mgr = reinterpret_cast<game::ActionManager**>(p_static_mgr);
@@ -415,7 +409,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     }
 
     // Both UseActionLocation and ReceiveActionEffect are strictly required for latency mitigation
-    const bool primary_hooks_ok = (addr_use_action != 0 && addr_recv_effect != 0 && hooked >= MIN_REQUIRED_PRIMARY_HOOKS);
+    const bool primary_hooks_ok = (addr_use_action != 0 && addr_recv_effect != 0 && hooked >= game::definitions::MIN_REQUIRED_PRIMARY_HOOKS);
     if (primary_hooks_ok) {
         MH_EnableHook(MH_ALL_HOOKS);
         m_hook_count = hooked;
@@ -444,16 +438,15 @@ void HookManager::uninstall() {
     MH_DisableHook(MH_ALL_HOOKS);
 
     // 2. Wait until all in-flight detours have safely completed
-    constexpr int MAX_WAIT_MS = 2000;
     const auto start = std::chrono::steady_clock::now();
     while (g_in_flight_detours.load(std::memory_order_acquire) > 0) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start
         ).count();
-        if (elapsed >= MAX_WAIT_MS) {
+        if (elapsed >= constants::HOOK_DRAIN_TIMEOUT_MS) {
             break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(constants::HOOK_DRAIN_POLL_INTERVAL_MS));
     }
 
     // 3. Uninitialize MinHook and clear trampolines only after all detours have drained

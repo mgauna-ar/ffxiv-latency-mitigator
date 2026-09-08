@@ -1,5 +1,6 @@
 #include "test_framework.hpp"
 #include "mitigator/sigscan.hpp"
+#include "mitigator/game_definitions.hpp"
 #include <vector>
 
 TEST_CASE(SigScan, PatternParsing) {
@@ -62,4 +63,35 @@ TEST_CASE(SigScan, ResolveRipRelativeNullAddr) {
 
     const uintptr_t call_target = mitigator::memory::resolve_call_relative(0);
     TEST_ASSERT_EQ(call_target, 0);
+}
+
+TEST_CASE(SigScan, GameDefinitionsSignaturesParseSuccessfully) {
+    using namespace mitigator::game;
+
+    const auto sig_use_primary = mitigator::memory::Signature::parse(signatures::USE_ACTION_LOCATION_PRIMARY);
+    TEST_ASSERT(!sig_use_primary.empty());
+    TEST_ASSERT_EQ(sig_use_primary.bytes.size(), sig_use_primary.mask.size());
+
+    const auto sig_use_fallback = mitigator::memory::Signature::parse(signatures::USE_ACTION_LOCATION_FALLBACK);
+    TEST_ASSERT(!sig_use_fallback.empty());
+
+    const auto sig_recv_primary = mitigator::memory::Signature::parse(signatures::RECEIVE_ACTION_EFFECT_PRIMARY);
+    TEST_ASSERT(!sig_recv_primary.empty());
+
+    const auto sig_recv_fallback = mitigator::memory::Signature::parse(signatures::RECEIVE_ACTION_EFFECT_FALLBACK);
+    TEST_ASSERT(!sig_recv_fallback.empty());
+
+    const auto sig_cast_begin = mitigator::memory::Signature::parse(signatures::CAST_BEGIN_PRIMARY);
+    TEST_ASSERT(!sig_cast_begin.empty());
+
+    const auto sig_cast_interrupt = mitigator::memory::Signature::parse(signatures::CAST_INTERRUPT_PRIMARY);
+    TEST_ASSERT(!sig_cast_interrupt.empty());
+
+    const auto sig_action_mgr = mitigator::memory::Signature::parse(signatures::ACTION_MANAGER_INSTANCE_PRIMARY);
+    TEST_ASSERT(!sig_action_mgr.empty());
+
+    // Validate definitions invariants
+    TEST_ASSERT_EQ(definitions::TOTAL_AVAILABLE_HOOKS, 4);
+    TEST_ASSERT_EQ(definitions::MIN_REQUIRED_PRIMARY_HOOKS, 2);
+    TEST_ASSERT(definitions::MIN_ACTION_EFFECT_LOCK_SECONDS > 0.0f);
 }

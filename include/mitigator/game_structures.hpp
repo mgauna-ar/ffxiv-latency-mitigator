@@ -1,7 +1,6 @@
 #pragma once
 
-#include <cstdint>
-#include <cstddef>
+#include "mitigator/game_definitions.hpp"
 
 namespace mitigator::game {
 
@@ -49,16 +48,7 @@ struct ActionManager {
 
 #pragma pack(pop)
 
-/// Known byte offsets within ActionManager
-namespace offsets {
-    constexpr size_t ACTION_MANAGER_ANIMATION_LOCK = 0x08;
-    constexpr size_t ACTION_MANAGER_IS_CASTING = 0x28;
-    constexpr size_t ACTION_MANAGER_ELAPSED_CAST_TIME = 0x30;
-    constexpr size_t ACTION_MANAGER_CAST_TIME = 0x34;
-    constexpr size_t ACTION_MANAGER_COMBO_TIME = 0x60;
-    constexpr size_t ACTION_MANAGER_IS_QUEUED = 0x68;
-    constexpr size_t ACTION_MANAGER_CURRENT_SEQUENCE = 0x120;
-}
+// Compile-time verification of ActionManager memory layout against client offsets defined in game_definitions.hpp
 
 // Compile-time verification of ActionManager memory layout against client offsets
 static_assert(offsetof(ActionManager, animation_lock) == offsets::ACTION_MANAGER_ANIMATION_LOCK,

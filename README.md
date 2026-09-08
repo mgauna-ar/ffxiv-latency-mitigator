@@ -143,6 +143,17 @@ Options:
 
 ---
 
+## 🔄 Updating for Game Patches
+
+When a new Final Fantasy XIV patch releases, updating the tool requires changing only **one single file**: [`include/mitigator/game_definitions.hpp`](include/mitigator/game_definitions.hpp).
+
+1. All AOB pattern signatures (`USE_ACTION_LOCATION_PRIMARY`, `RECEIVE_ACTION_EFFECT_PRIMARY`, etc.) are defined as `constexpr std::string_view` in `mitigator::game::signatures`.
+2. All memory offsets (`ACTION_MANAGER_ANIMATION_LOCK`, `ACTION_MANAGER_IS_CASTING`, etc.) are defined in `mitigator::game::offsets`.
+3. Memory layout assertions are checked at compile-time via `static_assert(offsetof(...))` in [`include/mitigator/game_structures.hpp`](include/mitigator/game_structures.hpp), ensuring accidental mismatches or typos fail before compiling an executable.
+4. Run `make test` or `cmake --build build --config Release` to produce an updated `ffxiv-mitigator.exe`.
+
+---
+
 ## License
 
 This project is licensed under the MIT License. MinHook is licensed under the 2-Clause BSD License.

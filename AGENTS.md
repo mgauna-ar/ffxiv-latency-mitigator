@@ -34,6 +34,7 @@ This document outlines the architectural patterns, engineering principles, memor
 
 | Component | Header / Source | Primary Responsibility |
 |---|---|---|
+| **Game Definitions** | `include/mitigator/game_definitions.hpp` | Centralized FFXIV AOB signatures, instruction offsets, memory offsets, and process target |
 | **Core Types** | `include/mitigator/types.hpp` | Common domain types, `MitigationConfig`, `MitigationResult`, action IDs |
 | **Rolling RTT** | `include/mitigator/rolling_rtt.hpp`<br>`src/core/rolling_rtt.cpp` | EMA RTT tracker, sliding-window median spike filter, jitter estimation |
 | **Sequence Tracker** | `include/mitigator/sequence_tracker.hpp`<br>`src/core/sequence_tracker.cpp` | Correlates action dispatches with server responses via sequence IDs or FIFO fallback with TTL pruning |
@@ -112,3 +113,33 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -A x64
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
+
+---
+
+## 🔄 Patch Day Update Guide (Game Updates)
+
+When Square Enix publishes an update to Final Fantasy XIV (`ffxiv_dx11.exe`), executable code and memory structures may shift. All game-specific signatures, displacements, and offsets are isolated in a single header: [`include/mitigator/game_definitions.hpp`](include/mitigator/game_definitions.hpp).
+
+### 2-Minute Update Procedure:
+1. **Open Disassembler (IDA Pro / Ghidra / x64dbg)** on the updated `ffxiv_dx11.exe`.
+2. **Locate Target Functions**:
+   - `UseActionLocation`: Find string references to action error codes or search by opcode sequence.
+   - `ReceiveActionEffect`: Search for the packet processing loop handling action effect headers.
+   - `CastBegin`: Search for writes to `ActionManager + 0x28` (`is_casting = true`).
+   - `CastInterrupt`: Search for resets of `ActionManager + 0x28` (`is_casting = false`).
+   - `ActionManager Instance`: Search for the static pointer resolution instruction (`MOV rcx, [rip + disp32]`).
+3. **Update [`include/mitigator/game_definitions.hpp`](include/mitigator/game_definitions.hpp)**:
+   - If signatures changed, update `game::signatures::...`.
+   - If struct offsets shifted, update `game::offsets::...`.
+   - If the RIP-relative instruction displacement changed, update `ACTION_MGR_RIP_DISP_OFFSET`.
+   - Update `SUPPORTED_GAME_VERSION` string.
+4. **Compile & Verify**:
+   - If struct offsets changed without adjusting `ActionManager` layout padding in [`include/mitigator/game_structures.hpp`](include/mitigator/game_structures.hpp), compile-time `static_assert` will fail immediately, preventing broken builds.
+   - Run tests:
+     ```bash
+     make test
+     ```
+   - Build release binary:
+     ```cmd
+     cmake --build build --config Release
+     ```

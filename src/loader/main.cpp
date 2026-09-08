@@ -1,4 +1,5 @@
 #include "mitigator/types.hpp"
+#include "mitigator/game_definitions.hpp"
 #include "loader/process_finder.hpp"
 #include "loader/injector.hpp"
 #include "loader/loader_ipc.hpp"
@@ -112,11 +113,11 @@ int main(int argc, char* argv[]) {
         ui.render_hotkey_bar(dry_run, verbose);
     });
 
-    std::cout << "[*] Searching for ffxiv_dx11.exe...\n";
-    auto proc = mitigator::loader::ProcessFinder::find_process("ffxiv_dx11.exe");
+    std::cout << "[*] Searching for " << mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME << "...\n";
+    auto proc = mitigator::loader::ProcessFinder::find_process();
     if (!proc.has_value()) {
-        std::cout << "[*] Waiting for ffxiv_dx11.exe to launch (Ctrl+C to abort)...\n";
-        proc = mitigator::loader::ProcessFinder::wait_for_process("ffxiv_dx11.exe", 0);
+        std::cout << "[*] Waiting for " << mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME << " to launch (Ctrl+C to abort)...\n";
+        proc = mitigator::loader::ProcessFinder::wait_for_process();
     }
 
     if (!proc.has_value() || !proc->handle) {
@@ -126,7 +127,11 @@ int main(int argc, char* argv[]) {
     }
 
     if (!proc->is_64_bit) {
-        ui.log_status("Detected process is not a 64-bit executable. Only 64-bit FFXIV (ffxiv_dx11.exe) is supported.", true);
+        ui.log_status(
+            std::string("Detected process is not a 64-bit executable. Only 64-bit FFXIV (") +
+            std::string(mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME) + ") is supported.",
+            true
+        );
         ipc_server.stop();
 #if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
