@@ -13,6 +13,7 @@ struct ProcessInfo {
     std::string name;
     bool is_64_bit{false};
     void* handle{nullptr};
+    uint32_t last_error{0};
 };
 
 /**
@@ -20,6 +21,9 @@ struct ProcessInfo {
  */
 class ProcessFinder {
 public:
+    /// Enables SeDebugPrivilege in the current process token (requires Administrator).
+    static bool enable_debug_privilege();
+
     /// Searches for a process with the specified image name (e.g. "ffxiv_dx11.exe").
     [[nodiscard]] static std::optional<ProcessInfo> find_process(
         std::string_view process_name = game::definitions::DEFAULT_GAME_PROCESS_NAME

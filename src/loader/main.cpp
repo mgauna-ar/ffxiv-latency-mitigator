@@ -97,6 +97,7 @@ int main(int argc, char* argv[]) {
     }
 
 #if defined(_WIN32)
+    mitigator::loader::ProcessFinder::enable_debug_privilege();
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
     // Enable virtual terminal processing for ANSI color codes
@@ -154,7 +155,8 @@ int main(int argc, char* argv[]) {
 
     if (!proc->handle) {
         ui.log_status(
-            "Access denied opening game process (PID: " + std::to_string(proc->pid) + ").",
+            "Access denied opening game process (PID: " + std::to_string(proc->pid) +
+            ", Win32 Error: " + std::to_string(proc->last_error) + ").",
             true
         );
         ui.log_status(

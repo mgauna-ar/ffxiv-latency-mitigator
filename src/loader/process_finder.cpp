@@ -12,6 +12,34 @@
 
 namespace mitigator::loader {
 
+bool ProcessFinder::enable_debug_privilege() {
+#if defined(_WIN32)
+    HANDLE h_token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &h_token)) {
+        return false;
+    }
+
+    LUID luid{};
+    if (!LookupPrivilegeValueW(nullptr, SE_DEBUG_NAME, &luid)) {
+        CloseHandle(h_token);
+        return false;
+    }
+
+    TOKEN_PRIVILEGES tp{};
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = luid;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+    const BOOL ok = AdjustTokenPrivileges(h_token, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr);
+    const DWORD err = GetLastError();
+    CloseHandle(h_token);
+
+    return (ok && err != ERROR_NOT_ALL_ASSIGNED);
+#else
+    return false;
+#endif
+}
+
 std::optional<ProcessInfo> ProcessFinder::find_process(std::string_view process_name) {
 #if defined(_WIN32)
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -28,6 +56,7 @@ std::optional<ProcessInfo> ProcessFinder::find_process(std::string_view process_
     }
 
     std::wstring target_name_w(process_name.begin(), process_name.end());
+    std::optional<ProcessInfo> fallback_proc;
 
     do {
         if (_wcsicmp(entry.szExeFile, target_name_w.c_str()) == 0) {
@@ -38,20 +67,31 @@ std::optional<ProcessInfo> ProcessFinder::find_process(std::string_view process_
                 entry.th32ProcessID
             );
 
+            const DWORD err = h_process ? 0 : GetLastError();
             const bool is_64 = h_process ? is_process_64_bit(h_process) : false;
-            CloseHandle(snapshot);
 
-            return ProcessInfo{
+            ProcessInfo info{
                 .pid = entry.th32ProcessID,
                 .name = std::string(process_name),
                 .is_64_bit = is_64,
-                .handle = h_process
+                .handle = h_process,
+                .last_error = err
             };
+
+            if (h_process != nullptr) {
+                CloseHandle(snapshot);
+                return info;
+            }
+
+            // Save first failure as fallback in case no other matching process succeeds
+            if (!fallback_proc.has_value()) {
+                fallback_proc = info;
+            }
         }
     } while (Process32NextW(snapshot, &entry));
 
     CloseHandle(snapshot);
-    return std::nullopt;
+    return fallback_proc;
 #else
     (void)process_name;
     return std::nullopt;
@@ -84,11 +124,23 @@ std::optional<ProcessInfo> ProcessFinder::wait_for_process(
     uint32_t timeout_seconds
 ) {
     const auto start = std::chrono::steady_clock::now();
+    int denied_retries = 0;
+    constexpr int MAX_DENIED_RETRIES = 10; // Retry for up to 5 seconds if process is still spawning
 
     while (true) {
         auto proc = find_process(process_name);
         if (proc.has_value()) {
-            return proc;
+            if (proc->handle != nullptr) {
+                return proc;
+            }
+            // Process exists but handle couldn't be opened yet.
+            // When FFXIV is launched, parent launcher holds initialization locks briefly.
+            // Retry for a few seconds before giving up.
+            if (++denied_retries >= MAX_DENIED_RETRIES) {
+                return proc;
+            }
+        } else {
+            denied_retries = 0;
         }
 
         if (timeout_seconds > 0) {
