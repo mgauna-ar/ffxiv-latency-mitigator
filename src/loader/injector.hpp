@@ -33,6 +33,11 @@ public:
      */
     void cleanup();
 
+    /**
+     * @brief Checks if a mitigator payload DLL is already loaded in the target process.
+     */
+    [[nodiscard]] static bool is_payload_already_loaded(const ProcessInfo& proc);
+
     /// Returns remote HMODULE in target process.
     [[nodiscard]] uintptr_t remote_module_handle() const { return m_remote_hmodule; }
 

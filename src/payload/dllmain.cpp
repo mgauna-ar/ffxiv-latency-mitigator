@@ -89,25 +89,28 @@ DWORD WINAPI PayloadMain(LPVOID module_handle) {
         const char* msg = hooks_ok ? "Detours installed successfully" : mitigator::payload::HookManager::instance().last_error();
         strncpy_s(status.status_message, sizeof(status.status_message), msg, _TRUNCATE);
         mitigator::payload::log_debug("PayloadMain: sending status packet...");
-        ipc_client.send_status(status);
+        const bool status_sent = ipc_client.send_status(status);
 
-        // If hook installation failed (e.g. game patched), abort and self-unload cleanly
-        if (!hooks_ok) {
-            mitigator::payload::log_debug("PayloadMain: hook installation failed, self-unloading.");
+        // If hook installation or status send failed, abort and self-unload cleanly
+        if (!hooks_ok || !status_sent) {
+            mitigator::payload::log_debug("PayloadMain: initialization failed (hooks_ok=" +
+                std::string(hooks_ok ? "true" : "false") + ", status_sent=" +
+                std::string(status_sent ? "true" : "false") + "), self-unloading.");
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            mitigator::payload::HookManager::instance().uninstall();
             ipc_client.disconnect();
             FreeLibraryAndExitThread(h_module, 0);
             return 0;
         }
 
-        // 5. Main payload lifecycle loop
+        // 5. Main payload lifecycle loop - exit if shutdown requested OR loader disconnects
         mitigator::payload::log_debug("PayloadMain: entering main lifecycle loop.");
-        while (!g_shutdown_requested.load()) {
+        while (!g_shutdown_requested.load() && ipc_client.is_connected()) {
             std::this_thread::sleep_for(LIFECYCLE_POLL_INTERVAL);
         }
 
         // 6. Graceful shutdown: Cleanly unhook detours
-        mitigator::payload::log_debug("PayloadMain: shutdown requested, uninstalling detours.");
+        mitigator::payload::log_debug("PayloadMain: shutdown requested or IPC disconnected, uninstalling detours.");
         mitigator::payload::HookManager::instance().uninstall();
 
         // Small delay to ensure any in-flight detoured threads have safely completed

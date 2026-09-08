@@ -207,6 +207,28 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[+] Found game process! PID: " << proc->pid << "\n";
 
+    if (mitigator::loader::DllInjector::is_payload_already_loaded(*proc)) {
+        ui.log_status(
+            "An existing mitigator payload DLL is ALREADY loaded in game process (PID " +
+            std::to_string(proc->pid) + ").",
+            true
+        );
+        ui.log_status(
+            "Windows cannot reload updated code into an already-injected game process.",
+            true
+        );
+        ui.log_status(
+            "Please completely CLOSE and REOPEN Final Fantasy XIV, then run ffxiv-mitigator again.",
+            true
+        );
+        ipc_server.stop();
+#if defined(_WIN32)
+        if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
+#endif
+        wait_for_user_exit();
+        return 1;
+    }
+
 #if defined(_WIN32)
     // Clean up any stale diagnostic log from a previous session
     wchar_t temp_dir[MAX_PATH];
@@ -261,13 +283,10 @@ int main(int argc, char* argv[]) {
 
     // Wait for payload to connect to pipe and complete handshake
     int wait_ticks = 0;
-    while ((!ipc_server.is_connected() || !ipc_server.has_received_status())
+    while (!ipc_server.has_received_status()
            && wait_ticks++ < MAX_HANDSHAKE_WAIT_TICKS
            && g_keep_running.load()) {
         std::this_thread::sleep_for(HANDSHAKE_POLL_INTERVAL);
-        if (ipc_server.has_received_status()) {
-            break;
-        }
     }
 
     const auto last_status = ipc_server.last_status();
@@ -282,7 +301,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (!ipc_server.is_connected() || !ipc_server.has_received_status()) {
+    if (!ipc_server.has_received_status()) {
         ui.log_status("Handshake timed out. Injected payload did not establish IPC telemetry.", true);
         print_payload_log(ui);
         ui.log_status("Possible causes:", true);

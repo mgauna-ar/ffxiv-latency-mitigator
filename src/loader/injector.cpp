@@ -7,6 +7,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <tlhelp32.h>
 #endif
 
 namespace mitigator::loader {
@@ -207,6 +208,38 @@ void DllInjector::cleanup() {
         }
         m_temp_path.clear();
     }
+#endif
+}
+
+bool DllInjector::is_payload_already_loaded(const ProcessInfo& proc) {
+#if defined(_WIN32)
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, proc.pid);
+    if (snap == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    MODULEENTRY32W me{};
+    me.dwSize = sizeof(MODULEENTRY32W);
+    bool found = false;
+
+    if (Module32FirstW(snap, &me)) {
+        do {
+            std::wstring mod = me.szModule;
+            for (auto& c : mod) {
+                c = static_cast<wchar_t>(towlower(c));
+            }
+            if (mod.find(L"mitigator_payload") != std::wstring::npos) {
+                found = true;
+                break;
+            }
+        } while (Module32NextW(snap, &me));
+    }
+
+    CloseHandle(snap);
+    return found;
+#else
+    (void)proc;
+    return false;
 #endif
 }
 
