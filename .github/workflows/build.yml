@@ -1,0 +1,52 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  build-windows:
+    name: Windows MSVC x64 Standalone Build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build All Targets
+        run: |
+          cmake --build build --config Release
+
+      - name: Run Unit Tests
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
+
+      - name: Verify Standalone Executable Exists
+        run: |
+          if (Test-Path "build\Release\ffxiv-mitigator.exe") {
+            Write-Host "ffxiv-mitigator.exe found in build\Release"
+          } elseif (Test-Path "build\bin\Release\ffxiv-mitigator.exe") {
+            Write-Host "ffxiv-mitigator.exe found in build\bin\Release"
+          } else {
+            Get-ChildItem -Path build -Recurse -Filter "*.exe"
+          }
+
+      - name: Upload Standalone Executable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffxiv-mitigator-windows-x64
+          path: |
+            build/Release/ffxiv-mitigator.exe
+            build/Release/mitigator_payload.dll
+          if-no-files-found: warn
