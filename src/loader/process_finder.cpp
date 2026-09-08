@@ -43,7 +43,7 @@ std::optional<ProcessInfo> ProcessFinder::find_process(std::string_view process_
 
             return ProcessInfo{
                 .pid = entry.th32ProcessID,
-                .name = process_name,
+                .name = std::string(process_name),
                 .is_64_bit = is_64,
                 .handle = h_process
             };

@@ -90,8 +90,8 @@ TEST_CASE(SigScan, GameDefinitionsSignaturesParseSuccessfully) {
     const auto sig_action_mgr = mitigator::memory::Signature::parse(signatures::ACTION_MANAGER_INSTANCE_PRIMARY);
     TEST_ASSERT(!sig_action_mgr.empty());
 
-    // Validate definitions invariants
-    TEST_ASSERT_EQ(definitions::TOTAL_AVAILABLE_HOOKS, 4);
-    TEST_ASSERT_EQ(definitions::MIN_REQUIRED_PRIMARY_HOOKS, 2);
-    TEST_ASSERT(definitions::MIN_ACTION_EFFECT_LOCK_SECONDS > 0.0f);
+    // Compile-time validation of definitions invariants
+    static_assert(definitions::TOTAL_AVAILABLE_HOOKS == 4);
+    static_assert(definitions::MIN_REQUIRED_PRIMARY_HOOKS == 2);
+    static_assert(definitions::MIN_ACTION_EFFECT_LOCK_SECONDS > 0.0f);
 }
