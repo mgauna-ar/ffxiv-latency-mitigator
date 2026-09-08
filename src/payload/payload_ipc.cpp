@@ -112,11 +112,10 @@ void PayloadIpcClient::disconnect() {
         m_reader_thread.join();
     }
 
-    // 3. Flush and close pipe handle safely under m_send_mutex
+    // 3. Close pipe handle safely under m_send_mutex
     {
         std::lock_guard<std::mutex> lock(m_send_mutex);
         if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
-            FlushFileBuffers(static_cast<HANDLE>(m_pipe_handle));
             CloseHandle(static_cast<HANDLE>(m_pipe_handle));
             m_pipe_handle = nullptr;
         }
@@ -158,8 +157,10 @@ bool PayloadIpcClient::send_status(const ipc::StatusPayload& payload) {
     auto buffer = ipc::serialize_status(payload);
 
 #if defined(_WIN32)
-    // Synchronously send and flush status packet so loader immediately receives
-    // handshake and diagnostic reports without depending on writer thread scheduling
+    // Synchronously send status packet so loader immediately receives
+    // handshake and diagnostic reports without depending on writer thread scheduling.
+    // Note: Do NOT call FlushFileBuffers on Named Pipe client handles as it blocks indefinitely
+    // awaiting explicit server-side drain acknowledgment.
     std::lock_guard<std::mutex> lock(m_send_mutex);
     if (!m_pipe_handle || m_pipe_handle == INVALID_HANDLE_VALUE) return false;
 
@@ -171,11 +172,9 @@ bool PayloadIpcClient::send_status(const ipc::StatusPayload& payload) {
         &written,
         nullptr
     );
-    if (ok && written == buffer.size()) {
-        FlushFileBuffers(static_cast<HANDLE>(m_pipe_handle));
-        return true;
-    }
-    return false;
+    log_debug("PayloadIpcClient::send_status: WriteFile ok=" + std::to_string(ok) +
+              ", written=" + std::to_string(written) + "/" + std::to_string(buffer.size()));
+    return (ok && written == buffer.size());
 #else
     return enqueue_packet(std::move(buffer));
 #endif
