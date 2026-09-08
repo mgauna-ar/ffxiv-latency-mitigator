@@ -110,7 +110,17 @@ int main(int argc, char* argv[]) {
     // Status callback
     ipc_server.set_status_callback([&](const mitigator::ipc::StatusPayload& s) {
         ui.render_header(s.game_pid, s.hooks_installed, target_ping_ms, dry_run);
-        ui.render_hotkey_bar(dry_run, verbose);
+        if (s.hooks_installed < mitigator::game::definitions::MIN_REQUIRED_PRIMARY_HOOKS) {
+            ui.log_status(
+                "Game update detected! Signature scan failed (" +
+                std::string(s.status_message) + ").",
+                true
+            );
+            ui.log_status("Game memory is safe and untouched. Payload automatically self-unloaded.", false);
+            ui.log_status("Update signatures in include/mitigator/game_definitions.hpp to support this patch.", false);
+        } else {
+            ui.render_hotkey_bar(dry_run, verbose);
+        }
     });
 
     std::cout << "[*] Searching for " << mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME << "...\n";

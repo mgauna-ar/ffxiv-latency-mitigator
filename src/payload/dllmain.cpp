@@ -73,9 +73,17 @@ DWORD WINAPI PayloadMain(LPVOID module_handle) {
             status.hooks_installed = mitigator::payload::HookManager::instance().active_hook_count();
             status.version_major = PAYLOAD_VERSION_MAJOR;
             status.version_minor = PAYLOAD_VERSION_MINOR;
-            const char* msg = hooks_ok ? "Detours installed successfully" : "Failed to hook all functions";
+            const char* msg = hooks_ok ? "Detours installed successfully" : "Signature scan failed: Game update detected";
             strncpy_s(status.status_message, sizeof(status.status_message), msg, _TRUNCATE);
             ipc_client.send_status(status);
+        }
+
+        // If hook installation failed (e.g. game patched), abort and self-unload cleanly
+        if (!hooks_ok) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            ipc_client.disconnect();
+            FreeLibraryAndExitThread(h_module, 0);
+            return 0;
         }
 
         // 5. Main payload lifecycle loop
