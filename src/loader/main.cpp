@@ -34,6 +34,20 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
     }
     return FALSE;
 }
+
+void wait_for_user_exit() {
+    HWND console_wnd = GetConsoleWindow();
+    if (console_wnd) {
+        DWORD proc_id = 0;
+        GetWindowThreadProcessId(console_wnd, &proc_id);
+        if (proc_id == GetCurrentProcessId()) {
+            std::cout << "\nPress any key to exit...\n";
+            _getch();
+        }
+    }
+}
+#else
+void wait_for_user_exit() {}
 #endif
 
 constexpr size_t MIN_EMBEDDED_PAYLOAD_SIZE = 100;
@@ -99,6 +113,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[*] Starting IPC server...\n";
     if (!ipc_server.start()) {
         ui.log_status("Failed to initialize Named Pipe server", true);
+        wait_for_user_exit();
         return 1;
     }
 
@@ -133,6 +148,7 @@ int main(int argc, char* argv[]) {
     if (!proc.has_value()) {
         ui.log_status("Game process not found.", true);
         ipc_server.stop();
+        wait_for_user_exit();
         return 1;
     }
 
@@ -146,6 +162,7 @@ int main(int argc, char* argv[]) {
             false
         );
         ipc_server.stop();
+        wait_for_user_exit();
         return 1;
     }
 
@@ -159,6 +176,7 @@ int main(int argc, char* argv[]) {
 #if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
 #endif
+        wait_for_user_exit();
         return 1;
     }
 
@@ -185,6 +203,7 @@ int main(int argc, char* argv[]) {
 #if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
 #endif
+        wait_for_user_exit();
         return 1;
     }
 
@@ -208,6 +227,7 @@ int main(int argc, char* argv[]) {
 #if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
 #endif
+        wait_for_user_exit();
         return 1;
     }
 
@@ -221,6 +241,7 @@ int main(int argc, char* argv[]) {
 #if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
 #endif
+        wait_for_user_exit();
         return 1;
     }
 
@@ -297,5 +318,6 @@ int main(int argc, char* argv[]) {
     ui.render_stats_summary();
     std::cout << "[+] Done. Clean exit completed.\n";
 
+    wait_for_user_exit();
     return 0;
 }
