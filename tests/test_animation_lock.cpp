@@ -104,9 +104,50 @@ TEST_CASE(AnimationLock, UntrackedFallbackToSmoothedRtt) {
     // Now an untracked server effect arrives (no matching request)
     const auto res = engine.calculate_mitigation(0x9999, 999, 600.0, t0 + std::chrono::milliseconds(500));
 
-    // Effective RTT should fallback to smoothed RTT (~100ms)
-    TEST_ASSERT(res.smoothed_rtt_ms > 0.0);
-    TEST_ASSERT(res.delay_reduced_ms > 0.0);
+    // Untracked actions (e.g. from party member/enemy) must NOT modify game memory
+    TEST_ASSERT(!res.applied);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 600.0, 0.001);
+    TEST_ASSERT_NEAR(res.delay_reduced_ms, 0.0, 0.001);
+}
+
+TEST_CASE(AnimationLock, MedianSpikeRejection) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Prime with several stable 50ms samples
+    for (int i = 1; i <= 4; ++i) {
+        engine.record_action_request(0x3000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x3000 + i, i, 600.0, t0 + std::chrono::milliseconds(50));
+    }
+
+    // Now an extreme 450ms packet hitch occurs
+    engine.record_action_request(0x3010, 10, t0);
+    const auto res = engine.calculate_mitigation(0x3010, 10, 600.0, t0 + std::chrono::milliseconds(450));
+
+    // Spike filter should replace effective RTT with median RTT (~50ms)
+    // Delay reduced = 50ms - 15ms = 35ms, adjusted lock = 600ms - 35ms = 565ms
+    TEST_ASSERT_NEAR(res.measured_rtt_ms, 450.0, 0.5);
+    TEST_ASSERT_NEAR(res.delay_reduced_ms, 35.0, 2.0);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 565.0, 2.0);
+    TEST_ASSERT(res.applied);
+}
+
+TEST_CASE(AnimationLock, AbsoluteAntiCheatFloorEnforcement) {
+    mitigator::MitigationConfig cfg{};
+    cfg.min_animation_lock_ms = 5.0; // Attempt invalid low floor
+    mitigator::AnimationLockMitigator engine(cfg);
+
+    // Should be clamped to at least 20.0ms
+    TEST_ASSERT(engine.get_config().min_animation_lock_ms >= 20.0);
+
+    engine.set_min_animation_lock_ms(0.0);
+    TEST_ASSERT_NEAR(engine.get_config().min_animation_lock_ms, 20.0, 0.001);
+
+    engine.set_min_animation_lock_ms(35.0);
+    TEST_ASSERT_NEAR(engine.get_config().min_animation_lock_ms, 35.0, 0.001);
 }
 
 TEST_CASE(AnimationLock, CumulativeStatistics) {

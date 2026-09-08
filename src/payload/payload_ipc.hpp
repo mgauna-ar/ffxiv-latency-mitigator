@@ -5,6 +5,9 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <queue>
+#include <vector>
+#include <condition_variable>
 
 namespace mitigator::payload {
 
@@ -21,16 +24,17 @@ public:
     explicit PayloadIpcClient(const char* pipe_name = ipc::DEFAULT_PIPE_NAME);
     ~PayloadIpcClient();
 
-    /// Connects to the loader's Named Pipe server and starts reader thread.
+    /// Connects to the loader's Named Pipe server and starts reader and writer threads.
     bool connect(uint32_t timeout_ms = 3000);
 
-    /// Disconnects and shuts down reader thread.
+    /// Disconnects and shuts down worker threads.
     void disconnect();
 
-    /// Sends a telemetry packet to the loader.
+    /// Enqueues a telemetry packet to be sent non-blockingly to the loader.
+    /// Drops packets if the queue is full to prevent freezing the game thread.
     bool send_telemetry(const ipc::TelemetryPayload& payload);
 
-    /// Sends a status packet to the loader.
+    /// Enqueues a status packet to be sent non-blockingly to the loader.
     bool send_status(const ipc::StatusPayload& payload);
 
     /// Sets callback invoked when a command is received from the loader.
@@ -41,13 +45,20 @@ public:
 
 private:
     void reader_thread_func();
+    void writer_thread_func();
+    bool enqueue_packet(std::vector<uint8_t>&& packet);
 
     [[maybe_unused]] const char* m_pipe_name;
     [[maybe_unused]] void* m_pipe_handle{nullptr}; // HANDLE
     std::atomic<bool> m_connected{false};
     std::atomic<bool> m_running{false};
     std::thread m_reader_thread;
+    std::thread m_writer_thread;
     std::mutex m_send_mutex;
+    std::mutex m_queue_mutex;
+    std::condition_variable m_queue_cv;
+    std::queue<std::vector<uint8_t>> m_send_queue;
+    static constexpr size_t MAX_QUEUE_SIZE = 256;
     CommandHandler m_command_handler;
 };
 

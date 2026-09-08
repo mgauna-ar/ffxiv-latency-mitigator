@@ -11,6 +11,7 @@
 #include <thread>
 #include <csignal>
 #include <atomic>
+#include <filesystem>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -146,7 +147,8 @@ int main(int argc, char* argv[]) {
     } else {
         // Fallback: look for mitigator_payload.dll in the current working directory
         std::cout << "[*] Searching for mitigator_payload.dll on disk...\n";
-        injected = injector.inject_from_file(*proc, L"mitigator_payload.dll");
+        const auto payload_path = std::filesystem::absolute("mitigator_payload.dll");
+        injected = injector.inject_from_file(*proc, payload_path.wstring());
     }
 
     if (!injected) {
@@ -178,6 +180,12 @@ int main(int argc, char* argv[]) {
     // Interactive hotkey input loop
     while (g_keep_running.load()) {
 #if defined(_WIN32)
+        if (proc->handle && WaitForSingleObject(static_cast<HANDLE>(proc->handle), 0) == WAIT_OBJECT_0) {
+            std::cout << "\n[!] Game process terminated unexpectedly.\n";
+            g_keep_running = false;
+            break;
+        }
+
         if (_kbhit()) {
             const int key = _getch();
             switch (key) {

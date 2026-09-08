@@ -6,7 +6,10 @@ namespace mitigator {
 
 AnimationLockMitigator::AnimationLockMitigator(const MitigationConfig& config)
     : m_config(config),
-      m_rtt_tracker(config.rtt_sample_window, config.target_ping_ms > 0 ? config.target_ping_ms * 3.0 : 50.0) {}
+      m_rtt_tracker(config.rtt_sample_window, config.target_ping_ms > 0 ? config.target_ping_ms * 3.0 : 50.0) {
+    // Enforce absolute anti-cheat safety floor of at least 20.0ms
+    m_config.min_animation_lock_ms = std::max(20.0, m_config.min_animation_lock_ms);
+}
 
 void AnimationLockMitigator::record_action_request(
     ActionId action_id,
@@ -33,26 +36,42 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
 
     // 1. Try to correlate with recorded outgoing action request
     const auto matched_req = m_seq_tracker.match_response(action_id, sequence, now);
+    if (!matched_req.has_value()) {
+        // Untracked server effect (party member, enemy, or zone-wide effect):
+        // Safely pass through without modifying game memory to prevent lock corruption.
+        res.adjusted_lock_ms = original_lock_ms;
+        res.delay_reduced_ms = 0.0;
+        res.applied = false;
+        res.measured_rtt_ms = 0.0;
+        res.smoothed_rtt_ms = m_rtt_tracker.get_smoothed_rtt_ms();
+        return res;
+    }
 
     double measured_rtt = 0.0;
-    if (matched_req.has_value()) {
-        const auto elapsed = std::chrono::duration_cast<Milliseconds>(
-            now - matched_req->timestamp
-        ).count();
-        if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
-            measured_rtt = elapsed;
-            m_rtt_tracker.add_sample(measured_rtt);
-        }
+    const auto elapsed = std::chrono::duration_cast<Milliseconds>(
+        now - matched_req->timestamp
+    ).count();
+    if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
+        measured_rtt = elapsed;
+        m_rtt_tracker.add_sample(measured_rtt);
     }
 
     res.measured_rtt_ms = measured_rtt;
     res.smoothed_rtt_ms = m_rtt_tracker.get_smoothed_rtt_ms();
 
-    // Use measured RTT if valid; otherwise fallback to current smoothed RTT estimate
-    const double effective_rtt = (measured_rtt > 0.0) ? measured_rtt : res.smoothed_rtt_ms;
+    // Use measured RTT, applying moving median spike filter to reject extreme latency anomalies
+    double effective_rtt = (measured_rtt > 0.0) ? measured_rtt : res.smoothed_rtt_ms;
+    if (m_rtt_tracker.sample_count() >= 3) {
+        const double median_rtt = m_rtt_tracker.get_median_rtt_ms();
+        const double jitter = m_rtt_tracker.get_jitter_ms();
+        const double outlier_threshold = median_rtt + std::max(50.0, 3.0 * jitter);
+        if (effective_rtt > outlier_threshold) {
+            effective_rtt = median_rtt;
+        }
+    }
 
-    // Check if active cast is in progress for this action
-    res.cast_active = m_cast_tracker.is_casting(now);
+    // Check if active cast is in progress for this action, using dynamic grace window scaled to RTT
+    res.cast_active = m_cast_tracker.is_casting(now, res.smoothed_rtt_ms);
 
     // If casting is active, preserve cast lock (e.g. caster tax / slide-cast duration)
     // Reducing cast locks risks clipping the cast animation and triggering server desync
@@ -132,6 +151,7 @@ MitigationConfig AnimationLockMitigator::get_config() const {
 void AnimationLockMitigator::set_config(const MitigationConfig& config) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_config = config;
+    m_config.min_animation_lock_ms = std::max(20.0, m_config.min_animation_lock_ms);
     m_rtt_tracker.set_window_size(config.rtt_sample_window);
 }
 
@@ -147,7 +167,7 @@ void AnimationLockMitigator::set_target_ping_ms(double target_ping_ms) {
 
 void AnimationLockMitigator::set_min_animation_lock_ms(double min_lock_ms) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_config.min_animation_lock_ms = std::max(0.0, min_lock_ms);
+    m_config.min_animation_lock_ms = std::max(20.0, min_lock_ms);
 }
 
 SessionStats AnimationLockMitigator::get_session_stats() const {

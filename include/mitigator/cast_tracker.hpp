@@ -26,7 +26,7 @@ public:
     void on_cast_end(TimePoint now = std::chrono::steady_clock::now());
 
     /// Returns true if the player is actively casting.
-    [[nodiscard]] bool is_casting(TimePoint now = std::chrono::steady_clock::now()) const;
+    [[nodiscard]] bool is_casting(TimePoint now = std::chrono::steady_clock::now(), double smoothed_rtt_ms = 0.0) const;
 
     /// Returns the ActionId currently being cast, or 0 if none.
     [[nodiscard]] ActionId current_cast_action_id() const;

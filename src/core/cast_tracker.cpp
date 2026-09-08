@@ -25,15 +25,19 @@ void CastTracker::on_cast_end(TimePoint /*now*/) {
     m_cast_duration_seconds = 0.0f;
 }
 
-bool CastTracker::is_casting(TimePoint now) const {
+bool CastTracker::is_casting(TimePoint now, double smoothed_rtt_ms) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_casting) {
         return false;
     }
 
     const auto elapsed = std::chrono::duration<float>(now - m_cast_start).count();
-    // Allow a small grace window after cast completes for server ack
-    return elapsed < (m_cast_duration_seconds + constants::CAST_COMPLETION_GRACE_WINDOW_SECONDS);
+    // Allow a dynamic grace window after cast completes for server ack scaled to RTT
+    const float dynamic_grace = std::max(
+        constants::CAST_COMPLETION_GRACE_WINDOW_SECONDS,
+        static_cast<float>(smoothed_rtt_ms / 2000.0) + 0.050f
+    );
+    return elapsed < (m_cast_duration_seconds + dynamic_grace);
 }
 
 ActionId CastTracker::current_cast_action_id() const {

@@ -1,6 +1,10 @@
 #include "payload/game_hooks.hpp"
 #include "mitigator/game_structures.hpp"
 #include "mitigator/sigscan.hpp"
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <cmath>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -14,6 +18,14 @@ namespace mitigator::payload {
 
 namespace {
 
+#if defined(_MSC_VER) || (defined(_WIN32) && defined(__clang__))
+#define MITIGATOR_SEH_TRY __try
+#define MITIGATOR_SEH_EXCEPT __except (EXCEPTION_EXECUTE_HANDLER)
+#else
+#define MITIGATOR_SEH_TRY if (true)
+#define MITIGATOR_SEH_EXCEPT else
+#endif
+
 #if defined(_WIN32)
 #define FFXIV_FASTCALL __fastcall
 // Instruction encoding constants for RIP-relative MOV rcx, [rip + disp32] (48 8B 0D [disp32])
@@ -24,16 +36,39 @@ constexpr size_t MOV_RCX_RIP_INSN_LEN = 7;
 // (UseActionLocation and ReceiveActionEffect are mandatory)
 constexpr uint32_t MIN_REQUIRED_PRIMARY_HOOKS = 2;
 
+// Atomic in-flight detour invocation counter to prevent uninstall race conditions
+std::atomic<int32_t> g_in_flight_detours{0};
+
+// RAII counter increment/decrement for detour invocations
+struct DetourScope {
+    DetourScope() { g_in_flight_detours.fetch_add(1, std::memory_order_acquire); }
+    ~DetourScope() { g_in_flight_detours.fetch_sub(1, std::memory_order_release); }
+    DetourScope(const DetourScope&) = delete;
+    DetourScope& operator=(const DetourScope&) = delete;
+};
+
 // Global pointers managed safely by HookManager
-AnimationLockMitigator* s_mitigator = nullptr;
-PayloadIpcClient* s_ipc = nullptr;
-game::ActionManager* s_action_manager = nullptr;
+std::atomic<AnimationLockMitigator*> s_mitigator{nullptr};
+std::atomic<PayloadIpcClient*> s_ipc{nullptr};
+std::atomic<game::ActionManager*> s_action_manager{nullptr};
+
+static game::ActionManager* safe_read_action_manager_ptr(game::ActionManager** pp_mgr) {
+    MITIGATOR_SEH_TRY {
+        if (pp_mgr != nullptr) {
+            return *pp_mgr;
+        }
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return nullptr;
+    }
+    return nullptr;
+}
 #else
 #define FFXIV_FASTCALL
 #endif
 
 // Function pointer typedefs
-using FnUseActionLocation = int64_t(FFXIV_FASTCALL*)(
+using FnUseActionLocation = bool(FFXIV_FASTCALL*)(
     game::ActionManager* self,
     uint32_t action_type,
     uint32_t action_id,
@@ -72,8 +107,8 @@ FnReceiveActionEffect fp_original_receive_action_effect = nullptr;
 FnCastBegin fp_original_cast_begin = nullptr;
 FnCastInterrupt fp_original_cast_interrupt = nullptr;
 
-// Detour implementations
-int64_t FFXIV_FASTCALL DetourUseActionLocation(
+// Detour implementations with SEH and RAII scope protection
+static bool DetourUseActionLocationProtected(
     game::ActionManager* self,
     uint32_t action_type,
     uint32_t action_id,
@@ -83,22 +118,124 @@ int64_t FFXIV_FASTCALL DetourUseActionLocation(
     int32_t pvp,
     game::Vector3* target_location
 ) {
-    if (self != nullptr) {
-        s_action_manager = self;
-    }
+    MITIGATOR_SEH_TRY {
+        if (self != nullptr) {
+            s_action_manager.store(self, std::memory_order_relaxed);
+        }
 
-    const int64_t ret = fp_original_use_action_location(
+        if (!fp_original_use_action_location) {
+            return false;
+        }
+
+        const bool ret = fp_original_use_action_location(
+            self, action_type, action_id, target_id, extra_param, use_type, pvp, target_location
+        );
+
+        // Check if action was accepted and dispatched. If rejected, or if the action was queued
+        // in client buffer (self->is_queued), do not record timestamp now to avoid RTT distortion.
+        const bool is_queued = (self != nullptr && self->is_queued);
+        auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+        if (ret && !is_queued && mitigator != nullptr) {
+            const uint32_t seq = (self != nullptr) ? static_cast<uint32_t>(self->current_sequence) : 0;
+            mitigator->record_action_request(action_id, seq);
+        }
+
+        return ret;
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return false;
+    }
+}
+
+bool FFXIV_FASTCALL DetourUseActionLocation(
+    game::ActionManager* self,
+    uint32_t action_type,
+    uint32_t action_id,
+    uint64_t target_id,
+    uint32_t extra_param,
+    uint32_t use_type,
+    int32_t pvp,
+    game::Vector3* target_location
+) {
+    DetourScope scope;
+    return DetourUseActionLocationProtected(
         self, action_type, action_id, target_id, extra_param, use_type, pvp, target_location
     );
+}
 
-    // Only record outgoing request if the action was accepted and dispatched by the game
-    // (ret != 0). If rejected (e.g. on cooldown/out of range), no packet was sent to server.
-    if (ret != 0 && s_mitigator != nullptr) {
-        const uint32_t seq = (self != nullptr) ? static_cast<uint32_t>(self->current_sequence) : 0;
-        s_mitigator->record_action_request(action_id, seq);
+static void DetourReceiveActionEffectProtected(
+    uint32_t source_id,
+    void* source_character,
+    game::Vector3* pos,
+    game::ActionEffectHeader* effect_header,
+    void* effect_data,
+    void* targets
+) {
+    MITIGATOR_SEH_TRY {
+        if (!fp_original_receive_action_effect) {
+            return;
+        }
+
+        auto* mgr = s_action_manager.load(std::memory_order_acquire);
+        const float old_lock = (mgr != nullptr) ? mgr->animation_lock : 0.0f;
+
+        // Call original game function to process effect and assign normal animationLock
+        fp_original_receive_action_effect(
+            source_id, source_character, pos, effect_header, effect_data, targets
+        );
+
+        mgr = s_action_manager.load(std::memory_order_acquire);
+        const float new_lock = (mgr != nullptr) ? mgr->animation_lock : 0.0f;
+
+        // Zone-wide action effect isolation:
+        // Only mitigate if animation lock was actually increased for local player and is valid
+        if (mgr == nullptr || !(new_lock > old_lock && new_lock > 0.01f && std::isfinite(new_lock))) {
+            return;
+        }
+
+        auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+        if (effect_header == nullptr || mitigator == nullptr) {
+            return;
+        }
+
+        const double original_lock_ms = static_cast<double>(new_lock) * constants::MS_PER_SECOND;
+        const auto result = mitigator->calculate_mitigation(
+            effect_header->action_id,
+            effect_header->global_sequence,
+            original_lock_ms
+        );
+
+        if (result.applied) {
+            const float new_lock_seconds = static_cast<float>(result.adjusted_lock_ms / constants::MS_PER_SECOND);
+            mgr->animation_lock = new_lock_seconds;
+        }
+
+        auto* ipc = s_ipc.load(std::memory_order_acquire);
+        if (ipc != nullptr && ipc->is_connected()) {
+            ipc::TelemetryPayload payload{};
+            payload.action_id = result.action_id;
+            payload.sequence = result.sequence;
+            payload.original_lock_ms = static_cast<float>(result.original_lock_ms);
+            payload.adjusted_lock_ms = static_cast<float>(result.adjusted_lock_ms);
+            payload.delay_reduced_ms = static_cast<float>(result.delay_reduced_ms);
+            payload.measured_rtt_ms = static_cast<float>(result.measured_rtt_ms);
+            payload.smoothed_rtt_ms = static_cast<float>(result.smoothed_rtt_ms);
+            payload.jitter_ms = static_cast<float>(mitigator->rtt_tracker().get_jitter_ms());
+            payload.clamped_floor = result.clamped_by_floor ? 1 : 0;
+            payload.dry_run = mitigator->get_config().dry_run ? 1 : 0;
+            payload.applied = result.applied ? 1 : 0;
+            payload.cast_active = result.cast_active ? 1 : 0;
+            payload.timestamp_ms = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()
+                ).count()
+            );
+            ipc->send_telemetry(payload);
+        }
     }
-
-    return ret;
+    MITIGATOR_SEH_EXCEPT {
+        return;
+    }
 }
 
 void FFXIV_FASTCALL DetourReceiveActionEffect(
@@ -109,61 +246,33 @@ void FFXIV_FASTCALL DetourReceiveActionEffect(
     void* effect_data,
     void* targets
 ) {
-    // Record animation lock before invoking the game handler
-    const float old_lock = (s_action_manager != nullptr) ? s_action_manager->animation_lock : 0.0f;
-
-    // Call the original game function so it processes effects and sets normal animationLock
-    fp_original_receive_action_effect(
+    DetourScope scope;
+    DetourReceiveActionEffectProtected(
         source_id, source_character, pos, effect_header, effect_data, targets
     );
+}
 
-    // If s_action_manager is available, check whether this action effect actually modified
-    // the local player's animation lock. In FFXIV, ReceiveActionEffect is called for ALL
-    // zone effects (enemies, party members, dot ticks). If the animation lock did not change
-    // or is 0, this packet was not an action affecting local player animation lock.
-    const float new_lock = (s_action_manager != nullptr) ? s_action_manager->animation_lock : 0.0f;
-    if (s_action_manager == nullptr || old_lock == new_lock || new_lock <= 0.0f) {
+static void DetourCastBeginProtected(
+    game::ActionManager* self,
+    uint32_t action_type,
+    uint32_t action_id,
+    float cast_time,
+    float current_cast_time
+) {
+    MITIGATOR_SEH_TRY {
+        if (self != nullptr) {
+            s_action_manager.store(self, std::memory_order_relaxed);
+        }
+        auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+        if (mitigator != nullptr) {
+            mitigator->record_cast_begin(action_id, cast_time);
+        }
+        if (fp_original_cast_begin) {
+            fp_original_cast_begin(self, action_type, action_id, cast_time, current_cast_time);
+        }
+    }
+    MITIGATOR_SEH_EXCEPT {
         return;
-    }
-
-    if (effect_header == nullptr || s_mitigator == nullptr) {
-        return;
-    }
-
-    const double original_lock_ms = static_cast<double>(new_lock) * constants::MS_PER_SECOND;
-    const auto result = s_mitigator->calculate_mitigation(
-        effect_header->action_id,
-        effect_header->global_sequence,
-        original_lock_ms
-    );
-
-    // If mitigation should be applied, adjust ActionManager->animation_lock immediately
-    if (result.applied) {
-        const float new_lock_seconds = static_cast<float>(result.adjusted_lock_ms / constants::MS_PER_SECOND);
-        s_action_manager->animation_lock = new_lock_seconds;
-    }
-
-    // Transmit telemetry to console via IPC
-    if (s_ipc != nullptr && s_ipc->is_connected()) {
-        ipc::TelemetryPayload payload{};
-        payload.action_id = result.action_id;
-        payload.sequence = result.sequence;
-        payload.original_lock_ms = static_cast<float>(result.original_lock_ms);
-        payload.adjusted_lock_ms = static_cast<float>(result.adjusted_lock_ms);
-        payload.delay_reduced_ms = static_cast<float>(result.delay_reduced_ms);
-        payload.measured_rtt_ms = static_cast<float>(result.measured_rtt_ms);
-        payload.smoothed_rtt_ms = static_cast<float>(result.smoothed_rtt_ms);
-        payload.jitter_ms = static_cast<float>(s_mitigator->rtt_tracker().get_jitter_ms());
-        payload.clamped_floor = result.clamped_by_floor ? 1 : 0;
-        payload.dry_run = s_mitigator->get_config().dry_run ? 1 : 0;
-        payload.applied = result.applied ? 1 : 0;
-        payload.cast_active = result.cast_active ? 1 : 0;
-        payload.timestamp_ms = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()
-            ).count()
-        );
-        s_ipc->send_telemetry(payload);
     }
 }
 
@@ -174,23 +283,31 @@ void FFXIV_FASTCALL DetourCastBegin(
     float cast_time,
     float current_cast_time
 ) {
-    if (self != nullptr) {
-        s_action_manager = self;
+    DetourScope scope;
+    DetourCastBeginProtected(self, action_type, action_id, cast_time, current_cast_time);
+}
+
+static void DetourCastInterruptProtected(game::ActionManager* self) {
+    MITIGATOR_SEH_TRY {
+        if (self != nullptr) {
+            s_action_manager.store(self, std::memory_order_relaxed);
+        }
+        auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+        if (mitigator != nullptr) {
+            mitigator->record_cast_interrupt();
+        }
+        if (fp_original_cast_interrupt) {
+            fp_original_cast_interrupt(self);
+        }
     }
-    if (s_mitigator != nullptr) {
-        s_mitigator->record_cast_begin(action_id, cast_time);
+    MITIGATOR_SEH_EXCEPT {
+        return;
     }
-    fp_original_cast_begin(self, action_type, action_id, cast_time, current_cast_time);
 }
 
 void FFXIV_FASTCALL DetourCastInterrupt(game::ActionManager* self) {
-    if (self != nullptr) {
-        s_action_manager = self;
-    }
-    if (s_mitigator != nullptr) {
-        s_mitigator->record_cast_interrupt();
-    }
-    fp_original_cast_interrupt(self);
+    DetourScope scope;
+    DetourCastInterruptProtected(self);
 }
 #endif // defined(_WIN32)
 
@@ -207,8 +324,8 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         return true;
     }
 
-    s_mitigator = mitigator;
-    s_ipc = ipc;
+    s_mitigator.store(mitigator, std::memory_order_release);
+    s_ipc.store(ipc, std::memory_order_release);
 
     if (MH_Initialize() != MH_OK) {
         return false;
@@ -290,8 +407,9 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         );
         if (p_static_mgr != 0) {
             auto pp_mgr = reinterpret_cast<game::ActionManager**>(p_static_mgr);
-            if (pp_mgr && *pp_mgr) {
-                s_action_manager = *pp_mgr;
+            auto* mgr = safe_read_action_manager_ptr(pp_mgr);
+            if (mgr != nullptr) {
+                s_action_manager.store(mgr, std::memory_order_release);
             }
         }
     }
@@ -306,6 +424,8 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     }
 
     MH_Uninitialize();
+    s_mitigator.store(nullptr, std::memory_order_release);
+    s_ipc.store(nullptr, std::memory_order_release);
     return false;
 #else
     (void)mitigator;
@@ -316,23 +436,38 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
 
 void HookManager::uninstall() {
 #if defined(_WIN32)
-    if (!m_installed.load()) {
+    if (!m_installed.exchange(false)) {
         return;
     }
 
+    // 1. Disable all MinHook hooks first so execution falls back to original code
     MH_DisableHook(MH_ALL_HOOKS);
+
+    // 2. Wait until all in-flight detours have safely completed
+    constexpr int MAX_WAIT_MS = 2000;
+    const auto start = std::chrono::steady_clock::now();
+    while (g_in_flight_detours.load(std::memory_order_acquire) > 0) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start
+        ).count();
+        if (elapsed >= MAX_WAIT_MS) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // 3. Uninitialize MinHook and clear trampolines only after all detours have drained
     MH_Uninitialize();
 
     fp_original_use_action_location = nullptr;
     fp_original_receive_action_effect = nullptr;
     fp_original_cast_begin = nullptr;
     fp_original_cast_interrupt = nullptr;
-    s_action_manager = nullptr;
-    s_mitigator = nullptr;
-    s_ipc = nullptr;
+    s_action_manager.store(nullptr, std::memory_order_release);
+    s_mitigator.store(nullptr, std::memory_order_release);
+    s_ipc.store(nullptr, std::memory_order_release);
 
     m_hook_count = 0;
-    m_installed = false;
 #endif
 }
 

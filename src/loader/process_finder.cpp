@@ -33,7 +33,7 @@ std::optional<ProcessInfo> ProcessFinder::find_process(const std::string& proces
         if (_wcsicmp(entry.szExeFile, target_name_w.c_str()) == 0) {
             HANDLE h_process = OpenProcess(
                 PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
-                PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
+                PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | SYNCHRONIZE,
                 FALSE,
                 entry.th32ProcessID
             );
