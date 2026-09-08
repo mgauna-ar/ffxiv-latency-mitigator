@@ -36,20 +36,30 @@ bool LoaderIpcServer::start() {
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
     sa.bInheritHandle = FALSE;
 
-    // Discretionary ACL (D) granting Generic All (GA) to Everyone (WD),
-    // and Mandatory Integrity Label (S:(ML)) set to Low (LW) with No-Write-Up policy disabled (NW).
-    // This allows processes running at Medium integrity (e.g. non-elevated game) to connect to
-    // and communicate with a High integrity (Administrator) server, or vice versa.
-    PSECURITY_DESCRIPTOR p_sd = nullptr;
-    const BOOL sddl_ok = ConvertStringSecurityDescriptorToSecurityDescriptorA(
-        "D:(A;;GA;;;WD)S:(ML;;NW;;;LW)",
-        SDDL_REVISION_1,
-        &p_sd,
-        nullptr
-    );
-    if (sddl_ok && p_sd) {
-        sa.lpSecurityDescriptor = p_sd;
+    // 1. Programmatically initialize a Security Descriptor with an explicit NULL DACL.
+    // A NULL DACL grants unrestricted access to all users and processes regardless of privilege.
+    SECURITY_DESCRIPTOR sd{};
+    InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+    SetSecurityDescriptorDacl(&sd, TRUE, nullptr, FALSE);
+
+    // 2. Also attempt to apply a Low Mandatory Integrity Label SACL:
+    // S:(ML;;NW;;;LW) allows Low & Medium integrity processes (e.g. non-elevated game)
+    // to write to a High integrity (Administrator) server pipe.
+    PSECURITY_DESCRIPTOR p_ml_sd = nullptr;
+    if (ConvertStringSecurityDescriptorToSecurityDescriptorA(
+            "S:(ML;;NW;;;LW)",
+            SDDL_REVISION_1,
+            &p_ml_sd,
+            nullptr)) {
+        PACL p_sacl = nullptr;
+        BOOL sacl_present = FALSE;
+        BOOL sacl_defaulted = FALSE;
+        if (GetSecurityDescriptorSacl(p_ml_sd, &sacl_present, &p_sacl, &sacl_defaulted) && sacl_present && p_sacl) {
+            SetSecurityDescriptorSacl(&sd, TRUE, p_sacl, FALSE);
+        }
     }
+
+    sa.lpSecurityDescriptor = &sd;
 
     HANDLE h_pipe = CreateNamedPipeA(
         m_pipe_name,
@@ -59,11 +69,31 @@ bool LoaderIpcServer::start() {
         PIPE_BUFFER_SIZE,
         PIPE_BUFFER_SIZE,
         PIPE_DEFAULT_TIMEOUT_MS,
-        p_sd ? &sa : nullptr
+        &sa
     );
 
-    if (p_sd) {
-        LocalFree(p_sd);
+    if (h_pipe == INVALID_HANDLE_VALUE) {
+        // If creating with the SACL failed (e.g. OS restricted SACL assignment),
+        // retry with NULL DACL alone.
+        SECURITY_DESCRIPTOR sd_dacl_only{};
+        InitializeSecurityDescriptor(&sd_dacl_only, SECURITY_DESCRIPTOR_REVISION);
+        SetSecurityDescriptorDacl(&sd_dacl_only, TRUE, nullptr, FALSE);
+        sa.lpSecurityDescriptor = &sd_dacl_only;
+
+        h_pipe = CreateNamedPipeA(
+            m_pipe_name,
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+            PIPE_UNLIMITED_INSTANCES,
+            PIPE_BUFFER_SIZE,
+            PIPE_BUFFER_SIZE,
+            PIPE_DEFAULT_TIMEOUT_MS,
+            &sa
+        );
+    }
+
+    if (p_ml_sd) {
+        LocalFree(p_ml_sd);
     }
 
     if (h_pipe == INVALID_HANDLE_VALUE) {

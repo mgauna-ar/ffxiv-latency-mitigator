@@ -19,22 +19,24 @@ bool ProcessFinder::enable_debug_privilege() {
         return false;
     }
 
-    LUID luid{};
-    if (!LookupPrivilegeValueW(nullptr, L"SeDebugPrivilege", &luid)) {
-        CloseHandle(h_token);
-        return false;
-    }
+    auto enable_priv = [&](LPCWSTR priv_name) -> bool {
+        LUID luid{};
+        if (!LookupPrivilegeValueW(nullptr, priv_name, &luid)) {
+            return false;
+        }
+        TOKEN_PRIVILEGES tp{};
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Luid = luid;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        const BOOL ok = AdjustTokenPrivileges(h_token, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr);
+        return (ok && GetLastError() != ERROR_NOT_ALL_ASSIGNED);
+    };
 
-    TOKEN_PRIVILEGES tp{};
-    tp.PrivilegeCount = 1;
-    tp.Privileges[0].Luid = luid;
-    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    const bool debug_ok = enable_priv(L"SeDebugPrivilege");
+    enable_priv(L"SeSecurityPrivilege"); // Best-effort for SACL assignment
 
-    const BOOL ok = AdjustTokenPrivileges(h_token, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr);
-    const DWORD err = GetLastError();
     CloseHandle(h_token);
-
-    return (ok && err != ERROR_NOT_ALL_ASSIGNED);
+    return debug_ok;
 #else
     return false;
 #endif

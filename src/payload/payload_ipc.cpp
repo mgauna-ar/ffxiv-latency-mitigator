@@ -1,4 +1,5 @@
 #include "payload/payload_ipc.hpp"
+#include "payload/payload_logger.hpp"
 #include <chrono>
 #include <algorithm>
 
@@ -24,8 +25,10 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         return true;
     }
 
+    log_debug("PayloadIpcClient::connect: connecting to pipe " + std::string(m_pipe_name));
     const auto start_time = std::chrono::steady_clock::now();
     HANDLE hPipe = INVALID_HANDLE_VALUE;
+    DWORD last_logged_err = 0;
 
     while (true) {
         hPipe = CreateFileA(
@@ -43,6 +46,11 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         }
 
         const DWORD err = GetLastError();
+        if (err != last_logged_err) {
+            log_debug("PayloadIpcClient::connect: CreateFileA failed, Win32 Error: " + std::to_string(err));
+            last_logged_err = err;
+        }
+
         const auto elapsed_ms = static_cast<uint32_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - start_time
@@ -50,6 +58,7 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         );
 
         if (elapsed_ms >= timeout_ms) {
+            log_debug("PayloadIpcClient::connect: timeout expired (" + std::to_string(timeout_ms) + "ms), aborting.");
             return false;
         }
 
@@ -62,13 +71,18 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         }
     }
 
+    log_debug("PayloadIpcClient::connect: CreateFileA succeeded! Setting message-read mode...");
+
     // Set message-read mode
     DWORD mode = PIPE_READMODE_MESSAGE;
     if (!SetNamedPipeHandleState(hPipe, &mode, nullptr, nullptr)) {
+        const DWORD err = GetLastError();
+        log_debug("PayloadIpcClient::connect: SetNamedPipeHandleState failed, Win32 Error: " + std::to_string(err));
         CloseHandle(hPipe);
         return false;
     }
 
+    log_debug("PayloadIpcClient::connect: SetNamedPipeHandleState succeeded. IPC channel open!");
     m_pipe_handle = hPipe;
     m_connected = true;
     m_running = true;

@@ -1,4 +1,5 @@
 #include "payload/game_hooks.hpp"
+#include "payload/payload_logger.hpp"
 #include "mitigator/game_structures.hpp"
 #include "mitigator/game_definitions.hpp"
 #include "mitigator/sigscan.hpp"
@@ -337,6 +338,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         const auto sig_fallback = memory::Signature::parse(game::signatures::USE_ACTION_LOCATION_FALLBACK);
         addr_use_action = memory::scan_module_section(nullptr, sig_fallback);
     }
+    log_debug("HookManager: UseActionLocation addr=" + (addr_use_action ? std::to_string(addr_use_action) : "NOT FOUND"));
 
     if (addr_use_action != 0) {
         if (MH_CreateHook(
@@ -355,6 +357,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         const auto sig_fallback = memory::Signature::parse(game::signatures::RECEIVE_ACTION_EFFECT_FALLBACK);
         addr_recv_effect = memory::scan_module_section(nullptr, sig_fallback);
     }
+    log_debug("HookManager: ReceiveActionEffect addr=" + (addr_recv_effect ? std::to_string(addr_recv_effect) : "NOT FOUND"));
 
     if (addr_recv_effect != 0) {
         if (MH_CreateHook(
@@ -369,6 +372,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     // 3. Hook CastBegin
     const auto sig_cast_begin = memory::Signature::parse(game::signatures::CAST_BEGIN_PRIMARY);
     const uintptr_t addr_cast_begin = memory::scan_module_section(nullptr, sig_cast_begin);
+    log_debug("HookManager: CastBegin addr=" + (addr_cast_begin ? std::to_string(addr_cast_begin) : "NOT FOUND"));
     if (addr_cast_begin != 0) {
         if (MH_CreateHook(
                 reinterpret_cast<LPVOID>(addr_cast_begin),
@@ -382,6 +386,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     // 4. Hook CastInterrupt
     const auto sig_cast_interrupt = memory::Signature::parse(game::signatures::CAST_INTERRUPT_PRIMARY);
     const uintptr_t addr_cast_interrupt = memory::scan_module_section(nullptr, sig_cast_interrupt);
+    log_debug("HookManager: CastInterrupt addr=" + (addr_cast_interrupt ? std::to_string(addr_cast_interrupt) : "NOT FOUND"));
     if (addr_cast_interrupt != 0) {
         if (MH_CreateHook(
                 reinterpret_cast<LPVOID>(addr_cast_interrupt),
@@ -395,6 +400,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     // 5. Attempt initial static pointer acquisition for ActionManager
     const auto sig_action_mgr = memory::Signature::parse(game::signatures::ACTION_MANAGER_INSTANCE_PRIMARY);
     const uintptr_t addr_action_mgr_insn = memory::scan_module_section(nullptr, sig_action_mgr);
+    log_debug("HookManager: ActionManager sig addr=" + (addr_action_mgr_insn ? std::to_string(addr_action_mgr_insn) : "NOT FOUND"));
     if (addr_action_mgr_insn != 0) {
         const uintptr_t p_static_mgr = memory::resolve_rip_relative(
             addr_action_mgr_insn,
@@ -417,6 +423,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         m_hook_count = hooked;
         m_installed = true;
         m_last_error = "OK";
+        log_debug("HookManager: All primary hooks enabled successfully! Hooked count: " + std::to_string(hooked));
         return true;
     }
 
@@ -431,6 +438,7 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     } else {
         m_last_error = "Hook installation failed";
     }
+    log_debug("HookManager: installation failed: " + std::string(m_last_error));
 
     MH_Uninitialize();
     s_mitigator.store(nullptr, std::memory_order_release);
