@@ -101,6 +101,14 @@ FnReceiveActionEffect fp_original_receive_action_effect = nullptr;
 FnCastBegin fp_original_cast_begin = nullptr;
 FnCastInterrupt fp_original_cast_interrupt = nullptr;
 
+static void OnActionDispatched(uint32_t action_id, uint32_t seq) {
+    auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+    if (mitigator != nullptr) {
+        mitigator->record_action_request(action_id, seq);
+        log_debug("UseActionLocation: accepted action=" + std::to_string(action_id) + " seq=" + std::to_string(seq));
+    }
+}
+
 // Detour implementations with SEH and RAII scope protection
 static uint8_t DetourUseActionLocationProtected(
     game::ActionManager* self,
@@ -111,34 +119,33 @@ static uint8_t DetourUseActionLocationProtected(
     uint32_t extra_param,
     uint8_t a7
 ) {
+    if (self != nullptr) {
+        s_action_manager.store(self, std::memory_order_release);
+    }
+
+    if (!fp_original_use_action_location) {
+        return 0;
+    }
+
+    uint8_t ret = 0;
     MITIGATOR_SEH_TRY {
-        if (self != nullptr) {
-            s_action_manager.store(self, std::memory_order_release);
-        }
-
-        if (!fp_original_use_action_location) {
-            return 0;
-        }
-
-        const uint8_t ret = fp_original_use_action_location(
+        ret = fp_original_use_action_location(
             self, action_type, action_id, target_id, target_location, extra_param, a7
         );
-
-        // Check if action was accepted and dispatched. If rejected, or if the action was queued
-        // in client buffer (self->is_queued), do not record timestamp now to avoid RTT distortion.
-        const bool is_queued = (self != nullptr && self->is_queued);
-        auto* mitigator = s_mitigator.load(std::memory_order_acquire);
-        if (ret != 0 && !is_queued && mitigator != nullptr) {
-            const uint32_t seq = (self != nullptr) ? static_cast<uint32_t>(self->current_sequence) : 0;
-            mitigator->record_action_request(action_id, seq);
-            log_debug("UseActionLocation: accepted action=" + std::to_string(action_id) + " seq=" + std::to_string(seq));
-        }
-
-        return ret;
     }
     MITIGATOR_SEH_EXCEPT {
         return 0;
     }
+
+    // Check if action was accepted and dispatched. If rejected, or if the action was queued
+    // in client buffer (self->is_queued), do not record timestamp now to avoid RTT distortion.
+    const bool is_queued = (self != nullptr && self->is_queued);
+    if (ret != 0 && !is_queued) {
+        const uint32_t seq = (self != nullptr) ? static_cast<uint32_t>(self->current_sequence) : 0;
+        OnActionDispatched(action_id, seq);
+    }
+
+    return ret;
 }
 
 uint8_t FFXIV_FASTCALL DetourUseActionLocation(
@@ -156,6 +163,71 @@ uint8_t FFXIV_FASTCALL DetourUseActionLocation(
     );
 }
 
+static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float old_lock) {
+    auto* mgr = s_action_manager.load(std::memory_order_acquire);
+    if (mgr == nullptr || effect_header == nullptr) {
+        return;
+    }
+
+    const float new_lock = mgr->animation_lock;
+
+    // Zone-wide action effect isolation:
+    // Only mitigate if animation lock was actually increased for local player and is valid
+    if (!(new_lock > old_lock && new_lock > game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS && std::isfinite(new_lock))) {
+        return;
+    }
+
+    auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+    if (mitigator == nullptr) {
+        return;
+    }
+
+    const uint32_t action_id = effect_header->action_id;
+    const uint32_t sequence = static_cast<uint32_t>(effect_header->source_sequence);
+    const double original_lock_ms = static_cast<double>(new_lock) * constants::MS_PER_SECOND;
+
+    const auto result = mitigator->calculate_mitigation(
+        action_id,
+        sequence,
+        original_lock_ms
+    );
+
+    if (result.applied) {
+        const float new_lock_seconds = static_cast<float>(result.adjusted_lock_ms / constants::MS_PER_SECOND);
+        mgr->animation_lock = new_lock_seconds;
+    }
+
+    log_debug("ReceiveActionEffect: action=" + std::to_string(action_id) +
+              " seq=" + std::to_string(sequence) +
+              " old_lock=" + std::to_string(old_lock) +
+              " new_lock=" + std::to_string(new_lock) +
+              " adjusted=" + std::to_string(result.adjusted_lock_ms / constants::MS_PER_SECOND) +
+              " applied=" + (result.applied ? "true" : "false"));
+
+    auto* ipc = s_ipc.load(std::memory_order_acquire);
+    if (ipc != nullptr && ipc->is_connected()) {
+        ipc::TelemetryPayload payload{};
+        payload.action_id = result.action_id;
+        payload.sequence = result.sequence;
+        payload.original_lock_ms = static_cast<float>(result.original_lock_ms);
+        payload.adjusted_lock_ms = static_cast<float>(result.adjusted_lock_ms);
+        payload.delay_reduced_ms = static_cast<float>(result.delay_reduced_ms);
+        payload.measured_rtt_ms = static_cast<float>(result.measured_rtt_ms);
+        payload.smoothed_rtt_ms = static_cast<float>(result.smoothed_rtt_ms);
+        payload.jitter_ms = static_cast<float>(mitigator->rtt_tracker().get_jitter_ms());
+        payload.clamped_floor = result.clamped_by_floor ? 1 : 0;
+        payload.dry_run = mitigator->get_config().dry_run ? 1 : 0;
+        payload.applied = result.applied ? 1 : 0;
+        payload.cast_active = result.cast_active ? 1 : 0;
+        payload.timestamp_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()
+            ).count()
+        );
+        ipc->send_telemetry(payload);
+    }
+}
+
 static void DetourReceiveActionEffectProtected(
     uint32_t source_id,
     void* source_character,
@@ -164,85 +236,24 @@ static void DetourReceiveActionEffectProtected(
     void* effect_data,
     void* targets
 ) {
+    float old_lock = 0.0f;
+    game::ActionManager* mgr = s_action_manager.load(std::memory_order_acquire);
+    if (mgr != nullptr) {
+        old_lock = mgr->animation_lock;
+    }
+
     MITIGATOR_SEH_TRY {
-        if (!fp_original_receive_action_effect) {
-            return;
-        }
-
-        auto* mgr = s_action_manager.load(std::memory_order_acquire);
-        const float old_lock = (mgr != nullptr) ? mgr->animation_lock : 0.0f;
-
-        // Call original game function to process effect and assign normal animationLock
-        fp_original_receive_action_effect(
-            source_id, source_character, pos, effect_header, effect_data, targets
-        );
-
-        mgr = s_action_manager.load(std::memory_order_acquire);
-        if (mgr == nullptr) {
-            return;
-        }
-
-        const float new_lock = mgr->animation_lock;
-
-        // Zone-wide action effect isolation:
-        // Only mitigate if animation lock was actually increased for local player and is valid
-        if (!(new_lock > old_lock && new_lock > game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS && std::isfinite(new_lock))) {
-            return;
-        }
-
-        auto* mitigator = s_mitigator.load(std::memory_order_acquire);
-        if (effect_header == nullptr || mitigator == nullptr) {
-            return;
-        }
-
-        const uint32_t action_id = effect_header->action_id;
-        const uint32_t sequence = static_cast<uint32_t>(effect_header->source_sequence);
-        const double original_lock_ms = static_cast<double>(new_lock) * constants::MS_PER_SECOND;
-
-        const auto result = mitigator->calculate_mitigation(
-            action_id,
-            sequence,
-            original_lock_ms
-        );
-
-        if (result.applied) {
-            const float new_lock_seconds = static_cast<float>(result.adjusted_lock_ms / constants::MS_PER_SECOND);
-            mgr->animation_lock = new_lock_seconds;
-        }
-
-        log_debug("ReceiveActionEffect: action=" + std::to_string(action_id) +
-                  " seq=" + std::to_string(sequence) +
-                  " old_lock=" + std::to_string(old_lock) +
-                  " new_lock=" + std::to_string(new_lock) +
-                  " adjusted=" + std::to_string(result.adjusted_lock_ms / constants::MS_PER_SECOND) +
-                  " applied=" + (result.applied ? "true" : "false"));
-
-        auto* ipc = s_ipc.load(std::memory_order_acquire);
-        if (ipc != nullptr && ipc->is_connected()) {
-            ipc::TelemetryPayload payload{};
-            payload.action_id = result.action_id;
-            payload.sequence = result.sequence;
-            payload.original_lock_ms = static_cast<float>(result.original_lock_ms);
-            payload.adjusted_lock_ms = static_cast<float>(result.adjusted_lock_ms);
-            payload.delay_reduced_ms = static_cast<float>(result.delay_reduced_ms);
-            payload.measured_rtt_ms = static_cast<float>(result.measured_rtt_ms);
-            payload.smoothed_rtt_ms = static_cast<float>(result.smoothed_rtt_ms);
-            payload.jitter_ms = static_cast<float>(mitigator->rtt_tracker().get_jitter_ms());
-            payload.clamped_floor = result.clamped_by_floor ? 1 : 0;
-            payload.dry_run = mitigator->get_config().dry_run ? 1 : 0;
-            payload.applied = result.applied ? 1 : 0;
-            payload.cast_active = result.cast_active ? 1 : 0;
-            payload.timestamp_ms = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()
-                ).count()
+        if (fp_original_receive_action_effect != nullptr) {
+            fp_original_receive_action_effect(
+                source_id, source_character, pos, effect_header, effect_data, targets
             );
-            ipc->send_telemetry(payload);
         }
     }
     MITIGATOR_SEH_EXCEPT {
         return;
     }
+
+    ProcessActionEffect(effect_header, old_lock);
 }
 
 void FFXIV_FASTCALL DetourReceiveActionEffect(
