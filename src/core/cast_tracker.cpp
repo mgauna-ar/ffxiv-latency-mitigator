@@ -32,8 +32,8 @@ bool CastTracker::is_casting(TimePoint now) const {
     }
 
     const auto elapsed = std::chrono::duration<float>(now - m_cast_start).count();
-    // Allow a small grace window (0.1s) after cast completes for server ack
-    return elapsed < (m_cast_duration_seconds + 0.1f);
+    // Allow a small grace window after cast completes for server ack
+    return elapsed < (m_cast_duration_seconds + constants::CAST_COMPLETION_GRACE_WINDOW_SECONDS);
 }
 
 ActionId CastTracker::current_cast_action_id() const {

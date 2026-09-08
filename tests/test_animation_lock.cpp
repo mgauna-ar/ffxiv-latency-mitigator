@@ -127,3 +127,64 @@ TEST_CASE(AnimationLock, CumulativeStatistics) {
     // Each action saved 100ms (115 - 15 = 100ms) -> total 500ms
     TEST_ASSERT_NEAR(stats.cumulative_time_saved_ms, 500.0, 2.0);
 }
+
+TEST_CASE(AnimationLock, ActiveCastPreservesAnimationLock) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.min_animation_lock_ms = 25.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Start casting a spell (e.g. Fire IV, 2.8s cast time)
+    engine.record_cast_begin(0x0E05, 2.8f, t0);
+
+    // Record request for the spell
+    engine.record_action_request(0x0E05, 50, t0);
+
+    // 100ms later during cast, an action effect arrives with standard 100ms cast lock
+    const auto t_recv = t0 + std::chrono::milliseconds(100);
+    const auto res = engine.calculate_mitigation(0x0E05, 50, 100.0, t_recv);
+
+    // Active cast must NOT have its animation lock reduced (prevents slide-cast clipping)
+    TEST_ASSERT(res.cast_active);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 100.0, 0.001);
+    TEST_ASSERT_NEAR(res.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(!res.applied);
+}
+
+TEST_CASE(AnimationLock, MaxAnimationLockCeilingClamping) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.max_animation_lock_ms = 2000.0; // 2.0s ceiling
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // High incoming animation lock (e.g. limit break: 3000ms) with small 35ms RTT
+    engine.record_action_request(0x0ABC, 60, t0);
+    const auto t_recv = t0 + std::chrono::milliseconds(35);
+    const auto res = engine.calculate_mitigation(0x0ABC, 60, 3000.0, t_recv);
+
+    // Target lock = 3000 - (35 - 15) = 2980ms -> clamped to max ceiling 2000ms
+    TEST_ASSERT(res.clamped_by_ceiling);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 2000.0, 0.001);
+}
+
+TEST_CASE(AnimationLock, ConservativeSafetyMargin) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.safety_margin_ms = 10.0; // 10ms conservative buffer to prevent over-reduction
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    engine.record_action_request(0x1234, 70, t0);
+    const auto t_recv = t0 + std::chrono::milliseconds(150);
+    const auto res = engine.calculate_mitigation(0x1234, 70, 600.0, t_recv);
+
+    // Latency delta = (150 - 15) - 10 = 125ms reduction
+    // Adjusted lock = 600 - 125 = 475ms
+    TEST_ASSERT_NEAR(res.delay_reduced_ms, 125.0, 0.01);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 475.0, 0.01);
+}

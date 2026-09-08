@@ -11,20 +11,54 @@ using SequenceId = uint32_t;
 using TimePoint = std::chrono::steady_clock::time_point;
 using Milliseconds = std::chrono::duration<double, std::milli>;
 
+/// Named constants and domain defaults across the mitigation engine
+namespace constants {
+    /// Milliseconds in one second
+    constexpr double MS_PER_SECOND = 1000.0;
+    /// Seconds in one millisecond
+    constexpr double SECONDS_PER_MS = 0.001;
+
+    /// Default simulated target ping in milliseconds
+    constexpr double DEFAULT_TARGET_PING_MS = 15.0;
+    /// Default safety floor for animation lock in milliseconds
+    constexpr double DEFAULT_MIN_ANIMATION_LOCK_MS = 25.0;
+    /// Default sanity upper ceiling for animation lock in milliseconds
+    constexpr double DEFAULT_MAX_ANIMATION_LOCK_MS = 2500.0;
+    /// Default window size for rolling RTT sample queue
+    constexpr size_t DEFAULT_RTT_SAMPLE_WINDOW = 10;
+    /// Default initial estimate for RTT in milliseconds
+    constexpr double DEFAULT_INITIAL_RTT_MS = 50.0;
+    /// Default conservative safety margin buffer in milliseconds
+    constexpr double DEFAULT_SAFETY_MARGIN_MS = 0.0;
+
+    /// Minimum plausible RTT sample in milliseconds (filters 0 or negative measurements)
+    constexpr double MIN_PLAUSIBLE_RTT_MS = 0.5;
+    /// Maximum plausible RTT sample in milliseconds (filters anomalous network disconnects)
+    constexpr double MAX_PLAUSIBLE_RTT_MS = 5000.0;
+
+    /// Default timeout for pruning stale action requests
+    constexpr auto DEFAULT_STALE_TIMEOUT = std::chrono::milliseconds(5000);
+    /// Maximum age for generic 0-sequence fallback matches
+    constexpr auto GENERIC_FALLBACK_MAX_ELAPSED = std::chrono::milliseconds(1500);
+
+    /// Grace window in seconds after cast completion to allow server packet ack
+    constexpr float CAST_COMPLETION_GRACE_WINDOW_SECONDS = 0.1f;
+}
+
 /// Configuration parameters for latency mitigation.
 struct MitigationConfig {
     /// Simulated target ping (RTT) in milliseconds (e.g. 10.0 - 20.0ms).
-    double target_ping_ms{15.0};
+    double target_ping_ms{constants::DEFAULT_TARGET_PING_MS};
 
     /// Hard safety floor for animation lock in milliseconds (25.0 - 40.0ms).
     /// Server anomaly detection guards prevent setting animation lock to 0.
-    double min_animation_lock_ms{25.0};
+    double min_animation_lock_ms{constants::DEFAULT_MIN_ANIMATION_LOCK_MS};
 
     /// Sanity upper bound for animation lock in milliseconds.
-    double max_animation_lock_ms{2500.0};
+    double max_animation_lock_ms{constants::DEFAULT_MAX_ANIMATION_LOCK_MS};
 
     /// Number of samples to retain for rolling RTT smoothing.
-    size_t rtt_sample_window{10};
+    size_t rtt_sample_window{constants::DEFAULT_RTT_SAMPLE_WINDOW};
 
     /// If true, calculate and log telemetry without modifying game memory.
     bool dry_run{false};
@@ -33,7 +67,7 @@ struct MitigationConfig {
     bool verbose{false};
 
     /// Extra buffer added to RTT adjustment to compensate for local frame pacing.
-    double safety_margin_ms{0.0};
+    double safety_margin_ms{constants::DEFAULT_SAFETY_MARGIN_MS};
 };
 
 /// Information recorded when an action is requested by the client.

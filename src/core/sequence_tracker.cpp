@@ -78,7 +78,7 @@ std::optional<ActionRequestInfo> SequenceTracker::match_response(
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             timestamp - m_pending.front().timestamp
         );
-        if (elapsed.count() >= 0 && elapsed.count() < 1500) {
+        if (elapsed >= std::chrono::milliseconds(0) && elapsed < constants::GENERIC_FALLBACK_MAX_ELAPSED) {
             ActionRequestInfo matched = m_pending.front();
             m_pending.pop_front();
             return matched;

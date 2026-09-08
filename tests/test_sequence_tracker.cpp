@@ -112,3 +112,40 @@ TEST_CASE(SequenceTracker, ConcurrentRequestsAndResponses) {
     sender.join();
     receiver.join();
 }
+
+TEST_CASE(SequenceTracker, NonZeroServerSequenceWithRealClientSequence) {
+    mitigator::SequenceTracker tracker;
+    const auto now = std::chrono::steady_clock::now();
+
+    // Two actions with real sequence numbers (as read from ActionManager->current_sequence)
+    tracker.record_request(0x1001, 101, now);
+    tracker.record_request(0x1002, 102, now + std::chrono::milliseconds(2));
+
+    // Response for second action arrives first
+    auto m2 = tracker.match_response(0x1002, 102, now + std::chrono::milliseconds(50));
+    TEST_ASSERT(m2.has_value());
+    TEST_ASSERT_EQ(m2->sequence, 102);
+    TEST_ASSERT_EQ(m2->action_id, 0x1002);
+
+    // Response for first action arrives second
+    auto m1 = tracker.match_response(0x1001, 101, now + std::chrono::milliseconds(70));
+    TEST_ASSERT(m1.has_value());
+    TEST_ASSERT_EQ(m1->sequence, 101);
+    TEST_ASSERT_EQ(m1->action_id, 0x1001);
+
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+}
+
+TEST_CASE(SequenceTracker, ActionIdMismatchWithZeroSequenceDoesNotMatch) {
+    mitigator::SequenceTracker tracker;
+    const auto now = std::chrono::steady_clock::now();
+
+    // Client records request for action 0x1000
+    tracker.record_request(0x1000, 0, now);
+    tracker.record_request(0x2000, 0, now + std::chrono::milliseconds(5));
+
+    // Response arrives for action 0x3000 (different action) with sequence 0
+    auto m = tracker.match_response(0x3000, 0, now + std::chrono::milliseconds(50));
+    TEST_ASSERT(!m.has_value());
+    TEST_ASSERT_EQ(tracker.pending_count(), 2);
+}

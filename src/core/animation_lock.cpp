@@ -39,7 +39,7 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         const auto elapsed = std::chrono::duration_cast<Milliseconds>(
             now - matched_req->timestamp
         ).count();
-        if (elapsed > 0.0 && elapsed < 5000.0) {
+        if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
             measured_rtt = elapsed;
             m_rtt_tracker.add_sample(measured_rtt);
         }
@@ -54,8 +54,18 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
     // Check if active cast is in progress for this action
     res.cast_active = m_cast_tracker.is_casting(now);
 
-    // 2. Compute latency delta to mitigate: Delta = RTT - TargetPing + SafetyMargin
-    double latency_delta = (effective_rtt - m_config.target_ping_ms) + m_config.safety_margin_ms;
+    // If casting is active, preserve cast lock (e.g. caster tax / slide-cast duration)
+    // Reducing cast locks risks clipping the cast animation and triggering server desync
+    if (res.cast_active) {
+        res.adjusted_lock_ms = original_lock_ms;
+        res.delay_reduced_ms = 0.0;
+        res.applied = false;
+        return res;
+    }
+
+    // 2. Compute latency delta to mitigate: Delta = RTT - TargetPing - SafetyMargin
+    // Safety margin provides a conservative buffer to prevent over-reducing
+    double latency_delta = (effective_rtt - m_config.target_ping_ms) - m_config.safety_margin_ms;
     if (latency_delta < 0.0) {
         latency_delta = 0.0; // Already faster than target ping, no need to reduce
     }

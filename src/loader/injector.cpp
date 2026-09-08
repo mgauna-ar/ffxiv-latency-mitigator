@@ -1,5 +1,6 @@
 #include "loader/injector.hpp"
 #include <fstream>
+#include <chrono>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -9,6 +10,17 @@
 #endif
 
 namespace mitigator::loader {
+
+namespace {
+#if defined(_WIN32)
+    // Timeout for LoadLibraryW execution in the target process
+    constexpr DWORD INJECTION_THREAD_TIMEOUT_MS = 10000;
+    // Number of retry attempts when deleting temp payload DLL on exit
+    constexpr int MAX_TEMP_CLEANUP_RETRIES = 5;
+    // Delay between file deletion attempts in milliseconds
+    constexpr DWORD CLEANUP_RETRY_INTERVAL_MS = 50;
+#endif
+}
 
 DllInjector::~DllInjector() {
     cleanup();
@@ -92,16 +104,27 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
     }
 
     // 5. Wait for injection to complete
-    WaitForSingleObject(h_remote_thread, 10000);
+    const DWORD wait_res = WaitForSingleObject(h_remote_thread, INJECTION_THREAD_TIMEOUT_MS);
+    if (wait_res != WAIT_OBJECT_0) {
+        CloseHandle(h_remote_thread);
+        VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
+        return false;
+    }
 
     DWORD remote_exit_code = 0;
-    GetExitCodeThread(h_remote_thread, &remote_exit_code);
+    if (!GetExitCodeThread(h_remote_thread, &remote_exit_code) ||
+        remote_exit_code == 0 ||
+        remote_exit_code == STILL_ACTIVE) {
+        CloseHandle(h_remote_thread);
+        VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
+        return false;
+    }
 
     CloseHandle(h_remote_thread);
     VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
 
     m_remote_hmodule = static_cast<uintptr_t>(remote_exit_code);
-    return (m_remote_hmodule != 0);
+    return true;
 #else
     (void)proc;
     (void)dll_path;
@@ -116,13 +139,17 @@ std::wstring DllInjector::write_temp_dll(std::span<const uint8_t> dll_bytes, uin
         return L"";
     }
 
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+
     std::wstring dll_file_path = std::wstring(temp_dir) + L"ffxiv_mitigator_payload_" +
-                                 std::to_wstring(pid) + L".dll";
+                                 std::to_wstring(pid) + L"_" + std::to_wstring(now_ms) + L".dll";
 
     HANDLE h_file = CreateFileW(
         dll_file_path.c_str(),
         GENERIC_WRITE,
-        0,
+        FILE_SHARE_READ,
         nullptr,
         CREATE_ALWAYS,
         FILE_ATTRIBUTE_NORMAL,
@@ -154,7 +181,12 @@ std::wstring DllInjector::write_temp_dll(std::span<const uint8_t> dll_bytes, uin
 void DllInjector::cleanup() {
 #if defined(_WIN32)
     if (!m_temp_path.empty()) {
-        DeleteFileW(m_temp_path.c_str());
+        for (int i = 0; i < MAX_TEMP_CLEANUP_RETRIES; ++i) {
+            if (DeleteFileW(m_temp_path.c_str())) {
+                break;
+            }
+            Sleep(CLEANUP_RETRY_INTERVAL_MS);
+        }
         m_temp_path.clear();
     }
 #endif

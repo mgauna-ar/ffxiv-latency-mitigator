@@ -108,13 +108,23 @@ uintptr_t resolve_rip_relative(
     return rip + static_cast<intptr_t>(disp);
 }
 
+namespace {
+    // x86-64 CALL rel32 instruction layout: opcode (1 byte: 0xE8) + displacement (4 bytes int32)
+    constexpr size_t CALL_REL32_DISP_OFFSET = 1;
+    constexpr size_t CALL_REL32_INSN_SIZE = 5;
+}
+
 uintptr_t resolve_call_relative(uintptr_t call_addr) {
     if (call_addr == 0) return 0;
-    // CALL rel32: E8 [disp32] -> instruction size is 5, disp offset is 1
-    return resolve_rip_relative(call_addr, 1, 5);
+    return resolve_rip_relative(call_addr, CALL_REL32_DISP_OFFSET, CALL_REL32_INSN_SIZE);
 }
 
 #if defined(_WIN32)
+namespace {
+    // Standard PE section header name length (fixed 8 bytes, not null-terminated if 8 chars)
+    constexpr size_t PE_SECTION_NAME_MAX_LEN = 8;
+}
+
 uintptr_t scan_module_section(
     void* module_handle,
     const Signature& sig,
@@ -136,8 +146,8 @@ uintptr_t scan_module_section(
 
     auto section = IMAGE_FIRST_SECTION(nt_headers);
     for (WORD i = 0; i < nt_headers->FileHeader.NumberOfSections; ++i, ++section) {
-        char name[9] = {0};
-        std::memcpy(name, section->Name, 8);
+        char name[PE_SECTION_NAME_MAX_LEN + 1] = {0};
+        std::memcpy(name, section->Name, PE_SECTION_NAME_MAX_LEN);
 
         if (std::strcmp(name, section_name) == 0) {
             const auto sec_base = reinterpret_cast<const uint8_t*>(

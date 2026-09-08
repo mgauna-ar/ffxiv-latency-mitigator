@@ -30,28 +30,50 @@ struct ActionEffectHeader {
 };
 
 /// Structure representing the game's ActionManager
-/// In FFXIV dx11, ActionManager holds the current animation lock timer
+/// In FFXIV dx11, ActionManager holds the current animation lock timer and sequence counter
 struct ActionManager {
     void* vtable{nullptr};                   // 0x00
     float animation_lock{0.0f};              // 0x08: Current active animation lock in seconds
-    uint8_t pad_0c[0x18]{0};                 // 0x0C - 0x24
-    uint32_t cast_action_type{0};            // 0x24
-    uint32_t cast_action_id{0};              // 0x28
-    float current_cast_time{0.0f};           // 0x2C
-    float max_cast_time{0.0f};               // 0x30
-    uint32_t combo_action_id{0};             // 0x34
-    float combo_timer{0.0f};                 // 0x38
-    bool is_casting{false};                  // 0x3C
+    uint8_t pad_0c[0x1C]{0};                 // 0x0C - 0x28
+    bool is_casting{false};                  // 0x28: Active spell/channel cast flag
+    uint8_t pad_29[0x07]{0};                 // 0x29 - 0x30
+    float elapsed_cast_time{0.0f};           // 0x30: Elapsed cast time in seconds
+    float cast_time{0.0f};                   // 0x34: Total cast duration in seconds
+    uint8_t pad_38[0x28]{0};                 // 0x38 - 0x60
+    float remaining_combo_time{0.0f};        // 0x60: Combo expiration timer
+    uint8_t pad_64[0x04]{0};                 // 0x64 - 0x68
+    bool is_queued{false};                   // 0x68: Action queuing flag
+    uint8_t pad_69[0xB7]{0};                 // 0x69 - 0x120
+    uint16_t current_sequence{0};            // 0x120: Rolling action sequence counter
 };
 
 #pragma pack(pop)
 
-/// Known default byte offsets within ActionManager (in case struct layout shifts across patches)
+/// Known byte offsets within ActionManager
 namespace offsets {
     constexpr size_t ACTION_MANAGER_ANIMATION_LOCK = 0x08;
-    constexpr size_t ACTION_MANAGER_IS_CASTING = 0x3C;
-    constexpr size_t ACTION_MANAGER_CAST_ACTION_ID = 0x28;
-    constexpr size_t ACTION_MANAGER_CURRENT_CAST_TIME = 0x2C;
+    constexpr size_t ACTION_MANAGER_IS_CASTING = 0x28;
+    constexpr size_t ACTION_MANAGER_ELAPSED_CAST_TIME = 0x30;
+    constexpr size_t ACTION_MANAGER_CAST_TIME = 0x34;
+    constexpr size_t ACTION_MANAGER_COMBO_TIME = 0x60;
+    constexpr size_t ACTION_MANAGER_IS_QUEUED = 0x68;
+    constexpr size_t ACTION_MANAGER_CURRENT_SEQUENCE = 0x120;
 }
+
+// Compile-time verification of ActionManager memory layout against client offsets
+static_assert(offsetof(ActionManager, animation_lock) == offsets::ACTION_MANAGER_ANIMATION_LOCK,
+    "ActionManager::animation_lock offset mismatch");
+static_assert(offsetof(ActionManager, is_casting) == offsets::ACTION_MANAGER_IS_CASTING,
+    "ActionManager::is_casting offset mismatch");
+static_assert(offsetof(ActionManager, elapsed_cast_time) == offsets::ACTION_MANAGER_ELAPSED_CAST_TIME,
+    "ActionManager::elapsed_cast_time offset mismatch");
+static_assert(offsetof(ActionManager, cast_time) == offsets::ACTION_MANAGER_CAST_TIME,
+    "ActionManager::cast_time offset mismatch");
+static_assert(offsetof(ActionManager, remaining_combo_time) == offsets::ACTION_MANAGER_COMBO_TIME,
+    "ActionManager::remaining_combo_time offset mismatch");
+static_assert(offsetof(ActionManager, is_queued) == offsets::ACTION_MANAGER_IS_QUEUED,
+    "ActionManager::is_queued offset mismatch");
+static_assert(offsetof(ActionManager, current_sequence) == offsets::ACTION_MANAGER_CURRENT_SEQUENCE,
+    "ActionManager::current_sequence offset mismatch");
 
 } // namespace mitigator::game

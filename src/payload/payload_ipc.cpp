@@ -61,9 +61,12 @@ void PayloadIpcClient::disconnect() {
     m_connected = false;
 
 #if defined(_WIN32)
-    if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
-        CloseHandle(static_cast<HANDLE>(m_pipe_handle));
-        m_pipe_handle = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_send_mutex);
+        if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(static_cast<HANDLE>(m_pipe_handle));
+            m_pipe_handle = nullptr;
+        }
     }
 #endif
 
@@ -124,9 +127,13 @@ void PayloadIpcClient::set_command_handler(CommandHandler handler) {
     m_command_handler = std::move(handler);
 }
 
+namespace {
+    constexpr size_t IPC_READ_BUFFER_SIZE = 1024;
+}
+
 void PayloadIpcClient::reader_thread_func() {
 #if defined(_WIN32)
-    std::vector<uint8_t> buffer(1024);
+    std::vector<uint8_t> buffer(IPC_READ_BUFFER_SIZE);
 
     while (m_running.load()) {
         DWORD bytes_read = 0;

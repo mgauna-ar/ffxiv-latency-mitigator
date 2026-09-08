@@ -55,29 +55,9 @@ When a server action effect arrives:
    $$L_{\text{adjusted}} = \max\Big(L_{\text{original}} - \Delta,\ L_{\text{min\_floor}}\Big)$$
 5. **Anti-Cheat Guardrail**: $L_{\text{min\_floor}}$ enforces a hard floor (default 25ms - 40ms) to prevent setting animation lock to 0ms or negative values, protecting against server-side frequency anomaly detection.
 
----
+## Architecture & Development
 
-## Modular Architecture (No God Files)
-
-This codebase strictly follows standard engineering principles, Single Responsibility Principle (SRP), and clean separation of concerns:
-
-| Component | Files | Single Responsibility |
-|---|---|---|
-| **Core Types** | `include/mitigator/types.hpp` | Common data structures, configuration, telemetry types |
-| **Rolling RTT** | `include/mitigator/rolling_rtt.hpp`<br>`src/core/rolling_rtt.cpp` | Exponential moving average, median spike rejection, jitter |
-| **Sequence Tracker** | `include/mitigator/sequence_tracker.hpp`<br>`src/core/sequence_tracker.cpp` | Correlating action requests with server effects & TTL pruning |
-| **Cast Tracker** | `include/mitigator/cast_tracker.hpp`<br>`src/core/cast_tracker.cpp` | Tracks spell casts to preserve cast-lock integrity |
-| **Animation Lock** | `include/mitigator/animation_lock.hpp`<br>`src/core/animation_lock.cpp` | Core mitigation engine, clamping guardrails, dry-run logic |
-| **IPC Protocol** | `include/mitigator/ipc_protocol.hpp`<br>`src/core/ipc_protocol.cpp` | Binary framing, serialization, packet validation |
-| **SigScan** | `include/mitigator/sigscan.hpp`<br>`src/payload/sigscan.cpp` | Wildcard AOB pattern scanning and RIP displacement resolver |
-| **Game Hooks** | `src/payload/game_hooks.hpp`<br>`src/payload/game_hooks.cpp` | MinHook detours (`UseActionLocation`, `ReceiveActionEffect`) |
-| **Payload IPC** | `src/payload/payload_ipc.hpp`<br>`src/payload/payload_ipc.cpp` | Injected Named Pipe client streaming telemetry |
-| **DLL Main** | `src/payload/dllmain.cpp` | DLL lifecycle, SEH protection, clean remote detachment |
-| **Process Finder** | `src/loader/process_finder.hpp`<br>`src/loader/process_finder.cpp` | Toolhelp32 process scanning and 64-bit verification |
-| **Injector** | `src/loader/injector.hpp`<br>`src/loader/injector.cpp` | Memory-mapped injection with automatic cleanup |
-| **Loader IPC** | `src/loader/loader_ipc.hpp`<br>`src/loader/loader_ipc.cpp` | Named Pipe server and command dispatcher |
-| **UI Renderer** | `src/loader/ui_renderer.hpp`<br>`src/loader/ui_renderer.cpp` | Formatted ANSI console UI and rolling statistics |
-| **Main Executable** | `src/loader/main.cpp` | CLI arguments, hotkey event loop, graceful exit coordinator |
+For technical details on codebase structure, single-responsibility file boundaries, game memory offsets, and developer/agent guidelines, see [AGENTS.md](AGENTS.md).
 
 ---
 

@@ -1,3 +1,4 @@
+#include "mitigator/types.hpp"
 #include "loader/process_finder.hpp"
 #include "loader/injector.hpp"
 #include "loader/loader_ipc.hpp"
@@ -33,6 +34,12 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
 }
 #endif
 
+constexpr size_t MIN_EMBEDDED_PAYLOAD_SIZE = 100;
+constexpr int MAX_HANDSHAKE_WAIT_TICKS = 50;
+constexpr auto HANDSHAKE_POLL_INTERVAL = std::chrono::milliseconds(100);
+constexpr auto HOTKEY_POLL_INTERVAL = std::chrono::milliseconds(50);
+constexpr auto UNHOOK_DRAIN_DELAY = std::chrono::milliseconds(300);
+
 void print_help(const char* exe_name) {
     std::cout << "Usage: " << exe_name << " [options]\n\n"
               << "Options:\n"
@@ -51,8 +58,8 @@ void print_help(const char* exe_name) {
 } // anonymous namespace
 
 int main(int argc, char* argv[]) {
-    double target_ping_ms = 15.0;
-    double min_lock_ms = 25.0;
+    double target_ping_ms = mitigator::constants::DEFAULT_TARGET_PING_MS;
+    double min_lock_ms = mitigator::constants::DEFAULT_MIN_ANIMATION_LOCK_MS;
     bool dry_run = false;
     bool verbose = false;
 
@@ -117,6 +124,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (!proc->is_64_bit) {
+        ui.log_status("Detected process is not a 64-bit executable. Only 64-bit FFXIV (ffxiv_dx11.exe) is supported.", true);
+        ipc_server.stop();
+#if defined(_WIN32)
+        if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
+#endif
+        return 1;
+    }
+
     std::cout << "[+] Found game process! PID: " << proc->pid << "\n";
 
     // Inject payload DLL
@@ -124,7 +140,7 @@ int main(int argc, char* argv[]) {
     const auto embedded_dll = mitigator::loader::get_embedded_payload();
 
     bool injected = false;
-    if (embedded_dll.size() > 100) {
+    if (embedded_dll.size() > MIN_EMBEDDED_PAYLOAD_SIZE) {
         std::cout << "[*] Injecting embedded payload (" << embedded_dll.size() << " bytes)...\n";
         injected = injector.inject(*proc, embedded_dll);
     } else {
@@ -136,6 +152,9 @@ int main(int argc, char* argv[]) {
     if (!injected) {
         ui.log_status("Failed to inject payload DLL into game process.", true);
         ipc_server.stop();
+#if defined(_WIN32)
+        if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
+#endif
         return 1;
     }
 
@@ -143,8 +162,8 @@ int main(int argc, char* argv[]) {
 
     // Wait for payload to connect to pipe
     int wait_ticks = 0;
-    while (!ipc_server.is_connected() && wait_ticks++ < 50 && g_keep_running.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    while (!ipc_server.is_connected() && wait_ticks++ < MAX_HANDSHAKE_WAIT_TICKS && g_keep_running.load()) {
+        std::this_thread::sleep_for(HANDSHAKE_POLL_INTERVAL);
     }
 
     if (!ipc_server.is_connected()) {
@@ -196,7 +215,7 @@ int main(int argc, char* argv[]) {
             }
         }
 #endif
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(HOTKEY_POLL_INTERVAL);
     }
 
     // Clean unhooking sequence
@@ -204,10 +223,16 @@ int main(int argc, char* argv[]) {
     ipc_server.request_unhook();
 
     // Allow remote thread to unhook and call FreeLibraryAndExitThread
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    std::this_thread::sleep_for(UNHOOK_DRAIN_DELAY);
 
     ipc_server.stop();
     injector.cleanup();
+
+#if defined(_WIN32)
+    if (proc->handle) {
+        CloseHandle(static_cast<HANDLE>(proc->handle));
+    }
+#endif
 
     ui.render_stats_summary();
     std::cout << "[+] Done. Clean exit completed.\n";

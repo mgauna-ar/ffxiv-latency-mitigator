@@ -17,6 +17,7 @@ generated/
 *.pdb
 *.ilk
 *.exp
+test_runner
 
 # IDE and editor files
 .vscode/

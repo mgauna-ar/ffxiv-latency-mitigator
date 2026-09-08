@@ -9,6 +9,15 @@
 
 namespace mitigator::loader {
 
+namespace {
+#if defined(_WIN32)
+    constexpr DWORD PIPE_BUFFER_SIZE = 4096;
+    constexpr DWORD PIPE_MAX_INSTANCES = 1;
+    constexpr DWORD PIPE_DEFAULT_TIMEOUT_MS = 0;
+    constexpr size_t IPC_READ_BUFFER_SIZE = 2048;
+#endif
+}
+
 LoaderIpcServer::LoaderIpcServer(const char* pipe_name)
     : m_pipe_name(pipe_name) {}
 
@@ -26,10 +35,10 @@ bool LoaderIpcServer::start() {
         m_pipe_name,
         PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-        1,
-        4096,
-        4096,
-        0,
+        PIPE_MAX_INSTANCES,
+        PIPE_BUFFER_SIZE,
+        PIPE_BUFFER_SIZE,
+        PIPE_DEFAULT_TIMEOUT_MS,
         nullptr
     );
 
@@ -52,10 +61,29 @@ void LoaderIpcServer::stop() {
     m_connected = false;
 
 #if defined(_WIN32)
-    if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
-        DisconnectNamedPipe(static_cast<HANDLE>(m_pipe_handle));
-        CloseHandle(static_cast<HANDLE>(m_pipe_handle));
-        m_pipe_handle = nullptr;
+    // If the worker thread is blocking in ConnectNamedPipe, wake it up with a dummy client connection
+    if (m_pipe_name && m_worker_thread.joinable()) {
+        HANDLE h_wake = CreateFileA(
+            m_pipe_name,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_EXISTING,
+            0,
+            nullptr
+        );
+        if (h_wake != INVALID_HANDLE_VALUE) {
+            CloseHandle(h_wake);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_send_mutex);
+        if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
+            DisconnectNamedPipe(static_cast<HANDLE>(m_pipe_handle));
+            CloseHandle(static_cast<HANDLE>(m_pipe_handle));
+            m_pipe_handle = nullptr;
+        }
     }
 #endif
 
@@ -142,7 +170,7 @@ void LoaderIpcServer::server_worker_thread() {
     }
 
     m_connected = true;
-    std::vector<uint8_t> buffer(2048);
+    std::vector<uint8_t> buffer(IPC_READ_BUFFER_SIZE);
 
     while (m_running.load()) {
         DWORD bytes_read = 0;

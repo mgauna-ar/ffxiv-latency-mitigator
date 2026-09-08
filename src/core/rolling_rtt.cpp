@@ -1,17 +1,23 @@
 #include "mitigator/rolling_rtt.hpp"
+#include "mitigator/types.hpp"
 #include <algorithm>
 #include <numeric>
 #include <cmath>
 
 namespace mitigator {
 
+namespace {
+    // Multiplier used in exponential moving average weighting: 2 / (N + 1)
+    constexpr double EMA_SMOOTHING_FACTOR = 2.0;
+}
+
 RollingRttTracker::RollingRttTracker(size_t window_size, double initial_rtt_ms)
-    : m_window_size(window_size > 0 ? window_size : 10),
-      m_smoothed_rtt(initial_rtt_ms > 0.0 ? initial_rtt_ms : 50.0) {}
+    : m_window_size(window_size > 0 ? window_size : constants::DEFAULT_RTT_SAMPLE_WINDOW),
+      m_smoothed_rtt(initial_rtt_ms > 0.0 ? initial_rtt_ms : constants::DEFAULT_INITIAL_RTT_MS) {}
 
 void RollingRttTracker::add_sample(double rtt_ms) {
-    // Sanity filter: Ignore negative or physically impossible values (> 5000ms)
-    if (rtt_ms < 0.5 || rtt_ms > 5000.0) {
+    // Sanity filter: Ignore negative or physically impossible values
+    if (rtt_ms < constants::MIN_PLAUSIBLE_RTT_MS || rtt_ms > constants::MAX_PLAUSIBLE_RTT_MS) {
         return;
     }
 
@@ -26,7 +32,7 @@ void RollingRttTracker::add_sample(double rtt_ms) {
 
     // EMA calculation: alpha adapts as samples accumulate
     const double n = static_cast<double>(std::min(m_total_samples, m_window_size));
-    const double alpha = 2.0 / (n + 1.0);
+    const double alpha = EMA_SMOOTHING_FACTOR / (n + 1.0);
 
     if (m_total_samples == 1) {
         m_smoothed_rtt = rtt_ms;
@@ -90,7 +96,7 @@ void RollingRttTracker::set_window_size(size_t window_size) {
 void RollingRttTracker::reset(double initial_rtt_ms) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_samples.clear();
-    m_smoothed_rtt = initial_rtt_ms > 0.0 ? initial_rtt_ms : 50.0;
+    m_smoothed_rtt = initial_rtt_ms > 0.0 ? initial_rtt_ms : constants::DEFAULT_INITIAL_RTT_MS;
     m_jitter = 0.0;
     m_total_samples = 0;
 }

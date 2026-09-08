@@ -16,7 +16,7 @@ namespace mitigator {
  */
 class SequenceTracker {
 public:
-    explicit SequenceTracker(std::chrono::milliseconds stale_timeout = std::chrono::milliseconds(5000));
+    explicit SequenceTracker(std::chrono::milliseconds stale_timeout = constants::DEFAULT_STALE_TIMEOUT);
 
     /**
      * @brief Records an outgoing action invocation.

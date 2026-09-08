@@ -1,4 +1,5 @@
 #include "loader/ui_renderer.hpp"
+#include "mitigator/types.hpp"
 #include <iostream>
 #include <iomanip>
 
@@ -96,7 +97,7 @@ void UiRenderer::render_stats_summary() {
 
     std::cout << color::CYAN << "--- Telemetry Summary ---------------------------------------------\n" << color::RESET;
     std::cout << "Mitigated: " << color::GREEN << m_actions_mitigated << "/" << m_total_actions << color::RESET
-              << " | Total Saved: " << color::YELLOW << color::BOLD << std::fixed << std::setprecision(2) << (m_cumulative_time_saved_ms / 1000.0) << "s" << color::RESET
+              << " | Total Saved: " << color::YELLOW << color::BOLD << std::fixed << std::setprecision(2) << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
               << " | Avg/Action: " << color::CYAN << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::RESET
               << " | Ping: " << m_last_smoothed_rtt << "ms (jitter: " << m_last_jitter << "ms)\n";
 }
