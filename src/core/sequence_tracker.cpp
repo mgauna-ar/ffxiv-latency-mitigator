@@ -6,7 +6,13 @@ namespace mitigator {
 SequenceTracker::SequenceTracker(std::chrono::milliseconds stale_timeout)
     : m_stale_timeout(stale_timeout) {}
 
-void SequenceTracker::record_request(ActionId action_id, SequenceId sequence, TimePoint timestamp) {
+void SequenceTracker::record_request(
+    ActionId action_id,
+    SequenceId sequence,
+    TimePoint timestamp,
+    bool is_cast,
+    float cast_duration_seconds
+) {
     std::lock_guard<std::mutex> lock(m_mutex);
 
     // Prune stale entries to keep queue compact
@@ -23,7 +29,9 @@ void SequenceTracker::record_request(ActionId action_id, SequenceId sequence, Ti
     m_pending.push_back(ActionRequestInfo{
         .action_id = action_id,
         .sequence = sequence,
-        .timestamp = timestamp
+        .timestamp = timestamp,
+        .is_cast = is_cast,
+        .cast_duration_seconds = cast_duration_seconds
     });
 }
 

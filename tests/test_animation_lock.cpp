@@ -229,3 +229,45 @@ TEST_CASE(AnimationLock, ConservativeSafetyMargin) {
     TEST_ASSERT_NEAR(res.delay_reduced_ms, 125.0, 0.01);
     TEST_ASSERT_NEAR(res.adjusted_lock_ms, 475.0, 0.01);
 }
+
+TEST_CASE(AnimationLock, SubsequentInstantActionAfterCastIsMitigated) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.min_animation_lock_ms = 25.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Cast a spell with 2.5s cast time
+    engine.record_cast_begin(0x4001, 2.5f, t0);
+    engine.record_action_request(0x4001, 80, t0, true, 2.5f);
+
+    // 2. Cast completes after 2.5s + 60ms latency = 2560ms
+    const auto t_cast_done = t0 + std::chrono::milliseconds(2560);
+    const auto res_cast = engine.calculate_mitigation(0x4001, 80, 100.0, t_cast_done);
+
+    // Cast lock must be preserved without reduction
+    TEST_ASSERT(res_cast.cast_active);
+    TEST_ASSERT(!res_cast.applied);
+    TEST_ASSERT_NEAR(res_cast.adjusted_lock_ms, 100.0, 0.001);
+    TEST_ASSERT_NEAR(res_cast.delay_reduced_ms, 0.0, 0.001);
+
+    // Cast duration must NOT be sampled into RTT tracker (RTT remains baseline, not 2560ms)
+    TEST_ASSERT(engine.rtt_tracker().get_smoothed_rtt_ms() < 200.0);
+
+    // 3. Immediately dispatch an instant action after cast completes
+    const auto t_instant = t_cast_done + std::chrono::milliseconds(50);
+    engine.record_action_request(0x4002, 81, t_instant, false, 0.0f);
+
+    // 4. Server responds 70ms later with 500ms animation lock
+    const auto t_instant_recv = t_instant + std::chrono::milliseconds(70);
+    const auto res_instant = engine.calculate_mitigation(0x4002, 81, 500.0, t_instant_recv);
+
+    // Instant action MUST be mitigated and NOT blocked by leftover cast state
+    TEST_ASSERT(!res_instant.cast_active);
+    TEST_ASSERT(res_instant.applied);
+    // Latency delta: 70ms RTT - 15ms target = 55ms reduction
+    TEST_ASSERT_NEAR(res_instant.delay_reduced_ms, 55.0, 1.0);
+    TEST_ASSERT_NEAR(res_instant.adjusted_lock_ms, 445.0, 1.0);
+}
+

@@ -14,11 +14,13 @@ AnimationLockMitigator::AnimationLockMitigator(const MitigationConfig& config)
 void AnimationLockMitigator::record_action_request(
     ActionId action_id,
     SequenceId sequence,
-    TimePoint timestamp
+    TimePoint timestamp,
+    bool is_cast,
+    float cast_duration_seconds
 ) {
     std::lock_guard<std::mutex> lock(m_mutex);
     ++m_total_actions_requested;
-    m_seq_tracker.record_request(action_id, sequence, timestamp);
+    m_seq_tracker.record_request(action_id, sequence, timestamp, is_cast, cast_duration_seconds);
 }
 
 MitigationResult AnimationLockMitigator::calculate_mitigation(
@@ -39,6 +41,26 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
     if (!matched_req.has_value()) {
         // Untracked server effect (party member, enemy, or zone-wide effect):
         // Safely pass through without modifying game memory to prevent lock corruption.
+        res.adjusted_lock_ms = original_lock_ms;
+        res.delay_reduced_ms = 0.0;
+        res.applied = false;
+        res.measured_rtt_ms = 0.0;
+        res.smoothed_rtt_ms = m_rtt_tracker.get_smoothed_rtt_ms();
+        return res;
+    }
+
+    // Check if active cast is in progress or if this effect corresponds to a casted action
+    const bool is_cast_effect = matched_req->is_cast;
+    const bool is_currently_casting = m_cast_tracker.is_casting(now, m_rtt_tracker.get_smoothed_rtt_ms());
+    res.cast_active = is_cast_effect || is_currently_casting;
+
+    // If casting is active or this effect was for a casted spell, preserve cast lock
+    // (e.g. caster tax / slide-cast duration). Do NOT reduce animation lock, and do NOT
+    // sample RTT (elapsed includes cast duration, which would corrupt ping tracking).
+    if (res.cast_active) {
+        if (is_cast_effect) {
+            m_cast_tracker.on_cast_end(now);
+        }
         res.adjusted_lock_ms = original_lock_ms;
         res.delay_reduced_ms = 0.0;
         res.applied = false;
@@ -71,18 +93,6 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         if (effective_rtt > outlier_threshold) {
             effective_rtt = median_rtt;
         }
-    }
-
-    // Check if active cast is in progress for this action, using dynamic grace window scaled to RTT
-    res.cast_active = m_cast_tracker.is_casting(now, res.smoothed_rtt_ms);
-
-    // If casting is active, preserve cast lock (e.g. caster tax / slide-cast duration)
-    // Reducing cast locks risks clipping the cast animation and triggering server desync
-    if (res.cast_active) {
-        res.adjusted_lock_ms = original_lock_ms;
-        res.delay_reduced_ms = 0.0;
-        res.applied = false;
-        return res;
     }
 
     // 2. Compute latency delta to mitigate: Delta = RTT - TargetPing - SafetyMargin

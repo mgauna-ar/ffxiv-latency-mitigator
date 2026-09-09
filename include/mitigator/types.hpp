@@ -94,6 +94,8 @@ struct ActionRequestInfo {
     ActionId action_id{0};
     SequenceId sequence{0};
     TimePoint timestamp{std::chrono::steady_clock::now()};
+    bool is_cast{false};
+    float cast_duration_seconds{0.0f};
 };
 
 /// Detailed outcome of an animation lock mitigation calculation.

@@ -65,11 +65,14 @@ using FnReceiveActionEffect = void(FFXIV_FASTCALL*)(
 FnUseActionLocation fp_original_use_action_location = nullptr;
 FnReceiveActionEffect fp_original_receive_action_effect = nullptr;
 
-static void OnActionDispatched(uint32_t action_id, uint32_t seq) {
+static void OnActionDispatched(uint32_t action_id, uint32_t seq, bool is_cast, float cast_duration) {
     auto* mitigator = s_mitigator.load(std::memory_order_acquire);
     if (mitigator != nullptr) {
-        mitigator->record_action_request(action_id, seq);
-        log_debug("UseActionLocation: accepted action=" + std::to_string(action_id) + " seq=" + std::to_string(seq));
+        mitigator->record_action_request(action_id, seq, std::chrono::steady_clock::now(), is_cast, cast_duration);
+        log_debug("UseActionLocation: accepted action=" + std::to_string(action_id) +
+                  " seq=" + std::to_string(seq) +
+                  " is_cast=" + (is_cast ? "true" : "false") +
+                  (is_cast ? (" cast_time=" + std::to_string(cast_duration)) : ""));
     }
 }
 
@@ -138,16 +141,19 @@ static uint8_t DetourUseActionLocationProtected(
     // Check if action was accepted and dispatched.
     if (ret != 0) {
         const SafeCastState cast_state = SafeReadActionManagerCastState(self);
-        OnActionDispatched(action_id, cast_state.sequence);
+        const bool is_cast = cast_state.is_casting && (cast_state.cast_time > 0.0f);
+        const float cast_time = is_cast ? cast_state.cast_time : 0.0f;
+
+        OnActionDispatched(action_id, cast_state.sequence, is_cast, cast_time);
 
         auto* mitigator = s_mitigator.load(std::memory_order_acquire);
         if (mitigator != nullptr) {
-            if (cast_state.cast_time > 0.0f) {
-                mitigator->record_cast_begin(action_id, cast_state.cast_time);
+            if (is_cast) {
+                mitigator->record_cast_begin(action_id, cast_time);
                 log_debug("UseActionLocation: cast initiated action=" + std::to_string(action_id) +
-                          " cast_time=" + std::to_string(cast_state.cast_time));
-            } else if (!cast_state.is_casting) {
-                // Instant cast or no active cast: clear any expired/interrupted cast
+                          " cast_time=" + std::to_string(cast_time));
+            } else {
+                // Instant action dispatched: clear any active cast in tracker
                 mitigator->record_cast_end();
             }
         }
