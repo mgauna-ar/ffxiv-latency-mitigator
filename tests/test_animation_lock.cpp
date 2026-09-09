@@ -271,3 +271,34 @@ TEST_CASE(AnimationLock, SubsequentInstantActionAfterCastIsMitigated) {
     TEST_ASSERT_NEAR(res_instant.adjusted_lock_ms, 445.0, 1.0);
 }
 
+TEST_CASE(AnimationLock, ColdStartSpikeRejectionPreventsFloorClamp) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.min_animation_lock_ms = 25.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Sample 1: Action 1 establishes baseline of 80ms RTT
+    engine.record_action_request(0x1001, 1, t0);
+    const auto res1 = engine.calculate_mitigation(0x1001, 1, 600.0, t0 + std::chrono::milliseconds(80));
+    TEST_ASSERT(res1.applied);
+    TEST_ASSERT(!res1.clamped_by_floor);
+    TEST_ASSERT_NEAR(res1.adjusted_lock_ms, 535.0, 1.0);
+
+    // Sample 2: Action 2 suffers an extreme 550ms opening burst / queuing delay
+    const auto t1 = t0 + std::chrono::milliseconds(600);
+    engine.record_action_request(0x1002, 2, t1);
+    const auto res2 = engine.calculate_mitigation(0x1002, 2, 600.0, t1 + std::chrono::milliseconds(550));
+
+    // With cold-start protection, effective RTT is capped to baseline (80ms) + 50ms = 130ms
+    // Adjusted lock = 600 - (130 - 15) = 485ms (well above 25ms floor)
+    TEST_ASSERT(!res2.clamped_by_floor);
+    TEST_ASSERT_NEAR(res2.adjusted_lock_ms, 485.0, 2.0);
+    TEST_ASSERT(res2.adjusted_lock_ms > 400.0);
+
+    // Verify session telemetry: zero floor clamps occurred
+    const auto stats = engine.get_session_stats();
+    TEST_ASSERT_EQ(stats.total_floor_clamps, 0);
+}
+

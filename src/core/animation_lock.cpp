@@ -69,13 +69,26 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         return res;
     }
 
+    const double baseline_rtt = m_rtt_tracker.get_smoothed_rtt_ms();
+    const bool is_cold_start = (m_rtt_tracker.sample_count() < constants::MIN_SAMPLES_FOR_MEDIAN_FILTER);
+
     double measured_rtt = 0.0;
     const auto elapsed = std::chrono::duration_cast<Milliseconds>(
         now - matched_req->timestamp
     ).count();
     if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
         measured_rtt = elapsed;
-        m_rtt_tracker.add_sample(measured_rtt);
+        double sample_to_ingest = measured_rtt;
+        if (is_cold_start && m_rtt_tracker.sample_count() > 0) {
+            const double cold_start_cap = baseline_rtt + std::max(
+                constants::MIN_OUTLIER_TOLERANCE_MS,
+                baseline_rtt * 0.5
+            );
+            if (sample_to_ingest > cold_start_cap) {
+                sample_to_ingest = cold_start_cap;
+            }
+        }
+        m_rtt_tracker.add_sample(sample_to_ingest);
     }
 
     res.measured_rtt_ms = measured_rtt;
@@ -92,6 +105,16 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         );
         if (effective_rtt > outlier_threshold) {
             effective_rtt = median_rtt;
+        }
+    } else if (is_cold_start && m_rtt_tracker.sample_count() > 1) {
+        // Cold-start protection: prior to having 3 samples for median filtering,
+        // guard against initial handshake jitter, hitching, or opening burst packet delays
+        const double cold_start_cap = baseline_rtt + std::max(
+            constants::MIN_OUTLIER_TOLERANCE_MS,
+            baseline_rtt * 0.5
+        );
+        if (effective_rtt > cold_start_cap) {
+            effective_rtt = cold_start_cap;
         }
     }
 
