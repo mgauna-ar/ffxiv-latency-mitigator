@@ -194,6 +194,35 @@ TEST_CASE(AnimationLock, ActiveCastPreservesAnimationLock) {
     TEST_ASSERT(!res.applied);
 }
 
+TEST_CASE(AnimationLock, CastGraceWindowProtectsLateServerAck) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.min_animation_lock_ms = 25.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Cast 2.0s spell
+    engine.record_cast_begin(0x0E06, 2.0f, t0);
+    engine.record_action_request(0x0E06, 51, t0, true, 2.0f);
+
+    // Server ack arrives at 2.06s (cast duration elapsed, but inside dynamic grace window)
+    const auto t_recv = t0 + std::chrono::milliseconds(2060);
+    const auto res = engine.calculate_mitigation(0x0E06, 51, 100.0, t_recv);
+
+    // Lock must be preserved (not reduced) because grace window protects it
+    TEST_ASSERT(res.cast_active);
+    TEST_ASSERT(!res.applied);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 100.0, 0.001);
+
+    // Subsequent instant action at 2.15s should now be clear to mitigate
+    const auto t_instant = t0 + std::chrono::milliseconds(2150);
+    engine.record_action_request(0x0E07, 52, t_instant, false, 0.0f);
+    const auto res_instant = engine.calculate_mitigation(0x0E07, 52, 600.0, t_instant + std::chrono::milliseconds(80));
+    TEST_ASSERT(!res_instant.cast_active);
+    TEST_ASSERT(res_instant.applied);
+}
+
 TEST_CASE(AnimationLock, MaxAnimationLockCeilingClamping) {
     mitigator::MitigationConfig cfg{};
     cfg.target_ping_ms = 15.0;

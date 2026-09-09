@@ -98,19 +98,21 @@ struct SafeCastState {
     uint32_t sequence;
     float cast_time;
     bool is_casting;
+    bool is_queued;
 };
 
 static SafeCastState SafeReadActionManagerCastState(game::ActionManager* self) {
-    SafeCastState state{0, 0.0f, false};
+    SafeCastState state{0, 0.0f, false, false};
     MITIGATOR_SEH_TRY {
         if (self != nullptr) {
             state.sequence = static_cast<uint32_t>(self->current_sequence);
             state.cast_time = (self->cast_time > 0.0f) ? self->cast_time : 0.0f;
             state.is_casting = self->is_casting;
+            state.is_queued = self->is_queued;
         }
     }
     MITIGATOR_SEH_EXCEPT {
-        state = {0, 0.0f, false};
+        state = {0, 0.0f, false, false};
     }
     return state;
 }
@@ -137,6 +139,13 @@ static uint8_t DetourUseActionLocationProtected(
     // Check if action was accepted and dispatched.
     if (ret != 0) {
         const SafeCastState cast_state = SafeReadActionManagerCastState(self);
+
+        // If the action was placed into the client-side queue, it has not been dispatched
+        // to the server yet. ActionManager will invoke UseActionLocation again upon dequeuing.
+        if (cast_state.is_queued) {
+            return ret;
+        }
+
         const bool is_cast = cast_state.is_casting && (cast_state.cast_time > 0.0f);
         const float cast_time = is_cast ? cast_state.cast_time : 0.0f;
 
@@ -146,8 +155,8 @@ static uint8_t DetourUseActionLocationProtected(
         if (mitigator != nullptr) {
             if (is_cast) {
                 mitigator->record_cast_begin(action_id, cast_time);
-            } else {
-                // Instant action dispatched: clear any active cast in tracker
+            } else if (!cast_state.is_casting) {
+                // Only clear cast state if ActionManager confirms the player is not actively casting
                 mitigator->record_cast_end();
             }
         }
