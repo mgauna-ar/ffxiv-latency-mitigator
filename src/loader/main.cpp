@@ -271,6 +271,10 @@ int main(int argc, char* argv[]) {
 
     if (!injected) {
         ui.log_status("Failed to inject payload DLL into game process.", true);
+        if (!injector.last_error().empty()) {
+            ui.log_status("Reason: " + injector.last_error(), false);
+        }
+        print_payload_log(ui);
         ipc_server.stop();
 #if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));

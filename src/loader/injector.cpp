@@ -29,11 +29,13 @@ DllInjector::~DllInjector() {
 
 bool DllInjector::inject(const ProcessInfo& proc, std::span<const uint8_t> dll_bytes) {
     if (dll_bytes.empty() || proc.handle == nullptr) {
+        m_last_error = "Embedded payload is empty or process handle is invalid";
         return false;
     }
 
     const std::wstring temp_dll = write_temp_dll(dll_bytes, proc.pid);
     if (temp_dll.empty()) {
+        m_last_error = "Failed to write embedded payload DLL to %TEMP%";
         return false;
     }
 
@@ -44,6 +46,7 @@ bool DllInjector::inject(const ProcessInfo& proc, std::span<const uint8_t> dll_b
 bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& dll_path) {
 #if defined(_WIN32)
     if (!proc.handle || dll_path.empty()) {
+        m_last_error = "Invalid process handle or empty DLL path.";
         return false;
     }
 
@@ -61,6 +64,7 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
         PAGE_READWRITE
     );
     if (!p_remote_path) {
+        m_last_error = "VirtualAllocEx failed (Win32 Error: " + std::to_string(GetLastError()) + ")";
         return false;
     }
 
@@ -68,6 +72,7 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
     SIZE_T bytes_written = 0;
     if (!WriteProcessMemory(h_process, p_remote_path, dll_path.c_str(), path_size_bytes, &bytes_written) ||
         bytes_written != path_size_bytes) {
+        m_last_error = "WriteProcessMemory failed (Win32 Error: " + std::to_string(GetLastError()) + ")";
         VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
         return false;
     }
@@ -75,6 +80,7 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
     // 3. Locate LoadLibraryW in kernel32.dll (identical VA across 64-bit processes)
     HMODULE h_kernel32 = GetModuleHandleW(L"kernel32.dll");
     if (!h_kernel32) {
+        m_last_error = "GetModuleHandleW(kernel32.dll) failed (Win32 Error: " + std::to_string(GetLastError()) + ")";
         VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
         return false;
     }
@@ -83,6 +89,7 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
         GetProcAddress(h_kernel32, "LoadLibraryW")
     );
     if (!pfn_load_library) {
+        m_last_error = "GetProcAddress(LoadLibraryW) failed (Win32 Error: " + std::to_string(GetLastError()) + ")";
         VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
         return false;
     }
@@ -100,6 +107,7 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
     );
 
     if (!h_remote_thread) {
+        m_last_error = "CreateRemoteThread failed (Win32 Error: " + std::to_string(GetLastError()) + "). Possible antivirus or elevation mismatch.";
         VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
         return false;
     }
@@ -107,15 +115,23 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
     // 5. Wait for injection to complete
     const DWORD wait_res = WaitForSingleObject(h_remote_thread, INJECTION_THREAD_TIMEOUT_MS);
     if (wait_res != WAIT_OBJECT_0) {
+        m_last_error = "Remote thread execution timed out or failed (wait result: " + std::to_string(wait_res) + ")";
         CloseHandle(h_remote_thread);
         VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
         return false;
     }
 
     DWORD remote_exit_code = 0;
-    if (!GetExitCodeThread(h_remote_thread, &remote_exit_code) ||
-        remote_exit_code == 0 ||
-        remote_exit_code == STILL_ACTIVE) {
+    if (!GetExitCodeThread(h_remote_thread, &remote_exit_code)) {
+        m_last_error = "GetExitCodeThread failed (Win32 Error: " + std::to_string(GetLastError()) + ")";
+        CloseHandle(h_remote_thread);
+        VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
+        return false;
+    }
+
+    if (remote_exit_code == 0 || remote_exit_code == STILL_ACTIVE) {
+        m_last_error = "LoadLibraryW failed in game process (remote exit code: 0). Target path: " +
+                       std::string(dll_path.begin(), dll_path.end());
         CloseHandle(h_remote_thread);
         VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
         return false;
@@ -125,10 +141,12 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
     VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
 
     m_remote_hmodule = static_cast<uintptr_t>(remote_exit_code);
+    m_last_error = "OK";
     return true;
 #else
     (void)proc;
     (void)dll_path;
+    m_last_error = "Platform not supported";
     return false;
 #endif
 }

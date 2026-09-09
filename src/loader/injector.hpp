@@ -41,12 +41,13 @@ public:
     /// Returns remote HMODULE in target process.
     [[nodiscard]] uintptr_t remote_module_handle() const { return m_remote_hmodule; }
 
-    /// Returns the temporary file path used for injection.
-    [[nodiscard]] const std::wstring& temp_dll_path() const { return m_temp_path; }
+    /// Returns diagnostic description of last error.
+    [[nodiscard]] const std::string& last_error() const { return m_last_error; }
 
 private:
     std::wstring write_temp_dll(std::span<const uint8_t> dll_bytes, uint32_t pid);
 
+    std::string m_last_error;
     uintptr_t m_remote_hmodule{0};
     std::wstring m_temp_path;
     [[maybe_unused]] void* m_target_process_handle{nullptr};
