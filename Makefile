@@ -7,7 +7,7 @@ SRCS = \
 	src/core/cast_tracker.cpp \
 	src/core/animation_lock.cpp \
 	src/core/ipc_protocol.cpp \
-	src/payload/sigscan.cpp \
+	src/core/sigscan.cpp \
 	tests/test_main.cpp \
 	tests/test_rolling_rtt.cpp \
 	tests/test_sequence_tracker.cpp \

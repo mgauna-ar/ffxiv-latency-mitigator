@@ -22,7 +22,7 @@ add_library(mitigator_core STATIC
     src/core/cast_tracker.cpp
     src/core/animation_lock.cpp
     src/core/ipc_protocol.cpp
-    src/payload/sigscan.cpp
+    src/core/sigscan.cpp
 )
 
 target_include_directories(mitigator_core PUBLIC
@@ -82,6 +82,7 @@ if(WIN32 OR CYGWIN OR MSYS OR MINGW)
         src/payload/dllmain.cpp
         src/payload/game_hooks.cpp
         src/payload/payload_ipc.cpp
+        src/payload/pe_scanner.cpp
     )
 
     target_include_directories(mitigator_payload PRIVATE

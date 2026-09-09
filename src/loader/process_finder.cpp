@@ -2,18 +2,15 @@
 #include <thread>
 #include <chrono>
 
-#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
 #include <tlhelp32.h>
-#endif
 
 namespace mitigator::loader {
 
 bool ProcessFinder::enable_debug_privilege() {
-#if defined(_WIN32)
     HANDLE h_token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &h_token)) {
         return false;
@@ -37,13 +34,9 @@ bool ProcessFinder::enable_debug_privilege() {
 
     CloseHandle(h_token);
     return debug_ok;
-#else
-    return false;
-#endif
 }
 
 std::optional<ProcessInfo> ProcessFinder::find_process(std::string_view process_name) {
-#if defined(_WIN32)
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
         return std::nullopt;
@@ -94,14 +87,9 @@ std::optional<ProcessInfo> ProcessFinder::find_process(std::string_view process_
 
     CloseHandle(snapshot);
     return fallback_proc;
-#else
-    (void)process_name;
-    return std::nullopt;
-#endif
 }
 
 bool ProcessFinder::is_process_64_bit(void* process_handle) {
-#if defined(_WIN32)
     if (!process_handle) return false;
 
     BOOL is_wow64 = FALSE;
@@ -115,10 +103,6 @@ bool ProcessFinder::is_process_64_bit(void* process_handle) {
     const bool is_os_64 = (sys_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64);
 
     return is_os_64 && !is_wow64;
-#else
-    (void)process_handle;
-    return false;
-#endif
 }
 
 std::optional<ProcessInfo> ProcessFinder::wait_for_process(

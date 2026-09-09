@@ -2,18 +2,15 @@
 #include <fstream>
 #include <chrono>
 
-#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
 #include <tlhelp32.h>
-#endif
 
 namespace mitigator::loader {
 
 namespace {
-#if defined(_WIN32)
     // Timeout for LoadLibraryW execution in the target process
     constexpr DWORD INJECTION_THREAD_TIMEOUT_MS = 10000;
     // Number of retry attempts when deleting temp payload DLL on exit
@@ -29,7 +26,6 @@ namespace {
         WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), str.data(), size_needed, nullptr, nullptr);
         return str;
     }
-#endif
 }
 
 DllInjector::~DllInjector() {
@@ -53,7 +49,6 @@ bool DllInjector::inject(const ProcessInfo& proc, std::span<const uint8_t> dll_b
 }
 
 bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& dll_path) {
-#if defined(_WIN32)
     if (!proc.handle || dll_path.empty()) {
         m_last_error = "Invalid process handle or empty DLL path.";
         return false;
@@ -152,16 +147,9 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
     m_remote_hmodule = static_cast<uintptr_t>(remote_exit_code);
     m_last_error = "OK";
     return true;
-#else
-    (void)proc;
-    (void)dll_path;
-    m_last_error = "Platform not supported";
-    return false;
-#endif
 }
 
 std::wstring DllInjector::write_temp_dll(std::span<const uint8_t> dll_bytes, uint32_t pid) {
-#if defined(_WIN32)
     wchar_t temp_dir[MAX_PATH];
     if (GetTempPathW(MAX_PATH, temp_dir) == 0) {
         return L"";
@@ -217,15 +205,9 @@ std::wstring DllInjector::write_temp_dll(std::span<const uint8_t> dll_bytes, uin
     Sleep(20);
 
     return (ok && written == dll_bytes.size()) ? dll_file_path : L"";
-#else
-    (void)dll_bytes;
-    (void)pid;
-    return L"";
-#endif
 }
 
 void DllInjector::cleanup() {
-#if defined(_WIN32)
     if (!m_temp_path.empty()) {
         for (int i = 0; i < MAX_TEMP_CLEANUP_RETRIES; ++i) {
             if (DeleteFileW(m_temp_path.c_str())) {
@@ -235,11 +217,9 @@ void DllInjector::cleanup() {
         }
         m_temp_path.clear();
     }
-#endif
 }
 
 bool DllInjector::is_payload_already_loaded(const ProcessInfo& proc) {
-#if defined(_WIN32)
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, proc.pid);
     if (snap == INVALID_HANDLE_VALUE) {
         return false;
@@ -264,10 +244,6 @@ bool DllInjector::is_payload_already_loaded(const ProcessInfo& proc) {
 
     CloseHandle(snap);
     return found;
-#else
-    (void)proc;
-    return false;
-#endif
 }
 
 } // namespace mitigator::loader

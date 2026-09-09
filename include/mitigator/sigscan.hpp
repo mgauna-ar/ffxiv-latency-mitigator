@@ -62,18 +62,4 @@ struct Signature {
  */
 [[nodiscard]] uintptr_t resolve_call_relative(uintptr_t call_addr);
 
-#if defined(_WIN32)
-/**
- * @brief Scans the .text code section of a loaded PE module.
- * @param module_handle Handle to the module (nullptr for current process exe).
- * @param sig Signature to search for.
- * @return Address of the match, or 0 if not found.
- */
-[[nodiscard]] uintptr_t scan_module_section(
-    void* module_handle,
-    const Signature& sig,
-    const char* section_name = ".text"
-);
-#endif
-
 } // namespace mitigator::memory

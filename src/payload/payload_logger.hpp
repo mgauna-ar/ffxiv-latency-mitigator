@@ -4,17 +4,14 @@
 #include <fstream>
 #include <chrono>
 
-#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#endif
 
 namespace mitigator::payload {
 
 inline void log_debug(std::string_view msg) {
-#if defined(_WIN32)
     wchar_t temp_dir[MAX_PATH];
     if (GetTempPathW(MAX_PATH, temp_dir) == 0) return;
     const std::wstring log_path = std::wstring(temp_dir) + L"ffxiv_mitigator_payload.log";
@@ -26,9 +23,6 @@ inline void log_debug(std::string_view msg) {
         f << "[" << ms << "] " << msg << "\n";
         f.flush();
     }
-#else
-    (void)msg;
-#endif
 }
 
 } // namespace mitigator::payload

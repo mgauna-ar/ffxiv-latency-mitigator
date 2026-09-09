@@ -3,32 +3,24 @@
 #include "mitigator/game_structures.hpp"
 #include "mitigator/game_definitions.hpp"
 #include "mitigator/sigscan.hpp"
+#include "payload/pe_scanner.hpp"
 #include <atomic>
 #include <chrono>
 #include <thread>
 #include <cmath>
 
-#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
 #include "MinHook.h"
-#endif
 
 namespace mitigator::payload {
 
 namespace {
 
-#if defined(_MSC_VER) || (defined(_WIN32) && defined(__clang__))
 #define MITIGATOR_SEH_TRY __try
 #define MITIGATOR_SEH_EXCEPT __except (EXCEPTION_EXECUTE_HANDLER)
-#else
-#define MITIGATOR_SEH_TRY if (true)
-#define MITIGATOR_SEH_EXCEPT else
-#endif
-
-#if defined(_WIN32)
 #define FFXIV_FASTCALL __fastcall
 
 // Atomic in-flight detour invocation counter to prevent uninstall race conditions
@@ -82,7 +74,6 @@ using FnReceiveActionEffect = void(FFXIV_FASTCALL*)(
     void* targets
 );
 
-#if defined(_WIN32)
 // Trampolines
 FnUseActionLocation fp_original_use_action_location = nullptr;
 FnReceiveActionEffect fp_original_receive_action_effect = nullptr;
@@ -256,7 +247,6 @@ void FFXIV_FASTCALL DetourReceiveActionEffect(
         source_id, source_character, pos, effect_header, effect_data, targets
     );
 }
-#endif // defined(_WIN32)
 
 } // anonymous namespace
 
@@ -266,7 +256,6 @@ HookManager& HookManager::instance() {
 }
 
 bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* ipc) {
-#if defined(_WIN32)
     if (m_installed.load()) {
         return true;
     }
@@ -409,15 +398,9 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     s_mitigator.store(nullptr, std::memory_order_release);
     s_ipc.store(nullptr, std::memory_order_release);
     return false;
-#else
-    (void)mitigator;
-    (void)ipc;
-    return false;
-#endif
 }
 
 void HookManager::uninstall() {
-#if defined(_WIN32)
     if (!m_installed.exchange(false)) {
         return;
     }
@@ -447,7 +430,6 @@ void HookManager::uninstall() {
     s_ipc.store(nullptr, std::memory_order_release);
 
     m_hook_count = 0;
-#endif
 }
 
 } // namespace mitigator::payload

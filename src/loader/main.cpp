@@ -15,19 +15,16 @@
 #include <atomic>
 #include <filesystem>
 
-#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
 #include <conio.h>
-#endif
 
 namespace {
 
 std::atomic<bool> g_keep_running{true};
 
-#if defined(_WIN32)
 BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT) {
         g_keep_running = false;
@@ -68,10 +65,6 @@ void print_payload_log(mitigator::loader::UiRenderer& ui) {
         }
     }
 }
-#else
-void wait_for_user_exit() {}
-void print_payload_log(mitigator::loader::UiRenderer&) {}
-#endif
 
 constexpr size_t MIN_EMBEDDED_PAYLOAD_SIZE = 100;
 constexpr int MAX_HANDSHAKE_WAIT_TICKS = 150;
@@ -119,7 +112,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-#if defined(_WIN32)
     mitigator::loader::ProcessFinder::enable_debug_privilege();
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
@@ -129,7 +121,6 @@ int main(int argc, char* argv[]) {
     if (GetConsoleMode(hOut, &dwMode)) {
         SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
-#endif
 
     mitigator::loader::UiRenderer ui;
     mitigator::loader::LoaderIpcServer ipc_server;
@@ -198,9 +189,7 @@ int main(int argc, char* argv[]) {
             true
         );
         ipc_server.stop();
-#if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
-#endif
         wait_for_user_exit();
         return 1;
     }
@@ -222,21 +211,17 @@ int main(int argc, char* argv[]) {
             true
         );
         ipc_server.stop();
-#if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
-#endif
         wait_for_user_exit();
         return 1;
     }
 
-#if defined(_WIN32)
     // Clean up any stale diagnostic log from a previous session
     wchar_t temp_dir[MAX_PATH];
     if (GetTempPathW(MAX_PATH, temp_dir) != 0) {
         const std::wstring log_path = std::wstring(temp_dir) + L"ffxiv_mitigator_payload.log";
         DeleteFileW(log_path.c_str());
     }
-#endif
 
     // Inject payload DLL
     mitigator::loader::DllInjector injector;
@@ -244,7 +229,6 @@ int main(int argc, char* argv[]) {
 
     // Check if mitigator_payload.dll is present next to the executable
     std::filesystem::path disk_payload_path;
-#if defined(_WIN32)
     wchar_t module_file[MAX_PATH];
     if (GetModuleFileNameW(nullptr, module_file, MAX_PATH) != 0) {
         const std::filesystem::path exe_dir = std::filesystem::path(module_file).parent_path();
@@ -253,7 +237,6 @@ int main(int argc, char* argv[]) {
             disk_payload_path = candidate;
         }
     }
-#endif
     if (disk_payload_path.empty() && std::filesystem::exists("mitigator_payload.dll")) {
         disk_payload_path = std::filesystem::absolute("mitigator_payload.dll");
     }
@@ -276,9 +259,7 @@ int main(int argc, char* argv[]) {
         }
         print_payload_log(ui);
         ipc_server.stop();
-#if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
-#endif
         wait_for_user_exit();
         return 1;
     }
@@ -298,9 +279,7 @@ int main(int argc, char* argv[]) {
         // Detour installation failed in game; status callback already displayed diagnostic
         print_payload_log(ui);
         ipc_server.stop();
-#if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
-#endif
         wait_for_user_exit();
         return 1;
     }
@@ -313,9 +292,7 @@ int main(int argc, char* argv[]) {
         ui.log_status("  2. Antivirus or security software blocked remote thread execution.", false);
         ui.log_status("  3. Third-party overlay or hook conflict.", false);
         ipc_server.stop();
-#if defined(_WIN32)
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
-#endif
         wait_for_user_exit();
         return 1;
     }
@@ -327,7 +304,6 @@ int main(int argc, char* argv[]) {
 
     // Interactive hotkey input loop
     while (g_keep_running.load()) {
-#if defined(_WIN32)
         if (proc->handle && WaitForSingleObject(static_cast<HANDLE>(proc->handle), 0) == WAIT_OBJECT_0) {
             std::cout << "\n[!] Game process terminated unexpectedly.\n";
             g_keep_running = false;
@@ -370,7 +346,6 @@ int main(int argc, char* argv[]) {
                     break;
             }
         }
-#endif
         std::this_thread::sleep_for(HOTKEY_POLL_INTERVAL);
     }
 
@@ -384,11 +359,9 @@ int main(int argc, char* argv[]) {
     ipc_server.stop();
     injector.cleanup();
 
-#if defined(_WIN32)
     if (proc->handle) {
         CloseHandle(static_cast<HANDLE>(proc->handle));
     }
-#endif
 
     ui.render_stats_summary();
     std::cout << "[+] Done. Clean exit completed.\n";

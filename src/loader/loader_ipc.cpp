@@ -1,22 +1,18 @@
 #include "loader/loader_ipc.hpp"
 
-#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
 #include <sddl.h>
 #pragma comment(lib, "advapi32.lib")
-#endif
 
 namespace mitigator::loader {
 
 namespace {
-#if defined(_WIN32)
     constexpr DWORD PIPE_BUFFER_SIZE = 4096;
     constexpr DWORD PIPE_DEFAULT_TIMEOUT_MS = 0;
     constexpr size_t IPC_READ_BUFFER_SIZE = 2048;
-#endif
 }
 
 LoaderIpcServer::LoaderIpcServer(const char* pipe_name)
@@ -27,7 +23,6 @@ LoaderIpcServer::~LoaderIpcServer() {
 }
 
 bool LoaderIpcServer::start() {
-#if defined(_WIN32)
     if (m_running.load()) {
         return true;
     }
@@ -115,9 +110,6 @@ bool LoaderIpcServer::start() {
 
     m_worker_thread = std::thread(&LoaderIpcServer::server_worker_thread, this);
     return true;
-#else
-    return false;
-#endif
 }
 
 void LoaderIpcServer::stop() {
@@ -125,7 +117,6 @@ void LoaderIpcServer::stop() {
     m_connected = false;
     m_status_received = false;
 
-#if defined(_WIN32)
     if (m_stop_event) {
         SetEvent(static_cast<HANDLE>(m_stop_event));
     }
@@ -139,18 +130,15 @@ void LoaderIpcServer::stop() {
             m_pipe_handle = nullptr;
         }
     }
-#endif
 
     if (m_worker_thread.joinable()) {
         m_worker_thread.join();
     }
 
-#if defined(_WIN32)
     if (m_stop_event) {
         CloseHandle(static_cast<HANDLE>(m_stop_event));
         m_stop_event = nullptr;
     }
-#endif
 }
 
 bool LoaderIpcServer::send_command(const ipc::CommandPayload& cmd) {
@@ -158,7 +146,6 @@ bool LoaderIpcServer::send_command(const ipc::CommandPayload& cmd) {
 
     const auto buffer = ipc::serialize_command(cmd);
 
-#if defined(_WIN32)
     std::lock_guard<std::mutex> lock(m_send_mutex);
     if (!m_pipe_handle || m_pipe_handle == INVALID_HANDLE_VALUE) return false;
 
@@ -179,10 +166,6 @@ bool LoaderIpcServer::send_command(const ipc::CommandPayload& cmd) {
     }
     CloseHandle(ov_write.hEvent);
     return (ok && written == buffer.size());
-#else
-    (void)buffer;
-    return false;
-#endif
 }
 
 bool LoaderIpcServer::request_unhook() {
@@ -226,7 +209,6 @@ bool LoaderIpcServer::reset_stats() {
 }
 
 void LoaderIpcServer::server_worker_thread() {
-#if defined(_WIN32)
     const auto h_pipe = static_cast<HANDLE>(m_pipe_handle);
     const auto h_stop = static_cast<HANDLE>(m_stop_event);
 
@@ -335,7 +317,6 @@ void LoaderIpcServer::server_worker_thread() {
 
     CloseHandle(ov_read.hEvent);
     m_connected = false;
-#endif
 }
 
 } // namespace mitigator::loader

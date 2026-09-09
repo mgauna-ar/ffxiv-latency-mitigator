@@ -3,12 +3,10 @@
 #include <chrono>
 #include <algorithm>
 
-#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#endif
 
 namespace mitigator::payload {
 
@@ -20,7 +18,6 @@ PayloadIpcClient::~PayloadIpcClient() {
 }
 
 bool PayloadIpcClient::connect(uint32_t timeout_ms) {
-#if defined(_WIN32)
     if (m_connected.load()) {
         return true;
     }
@@ -101,28 +98,21 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
     m_running = true;
 
     return true;
-#else
-    (void)timeout_ms;
-    return false;
-#endif
 }
 
 void PayloadIpcClient::start_worker_threads() {
-#if defined(_WIN32)
     if (!m_reader_thread.joinable()) {
         m_reader_thread = std::thread(&PayloadIpcClient::reader_thread_func, this);
     }
     if (!m_writer_thread.joinable()) {
         m_writer_thread = std::thread(&PayloadIpcClient::writer_thread_func, this);
     }
-#endif
 }
 
 void PayloadIpcClient::disconnect() {
     m_running = false;
     m_queue_cv.notify_all();
 
-#if defined(_WIN32)
     if (m_stop_event) {
         SetEvent(static_cast<HANDLE>(m_stop_event));
     }
@@ -153,7 +143,6 @@ void PayloadIpcClient::disconnect() {
         m_stop_event = nullptr;
     }
     m_connected = false;
-#endif
 
     // Clear residual queue
     std::lock_guard<std::mutex> lock(m_queue_mutex);
@@ -188,7 +177,6 @@ bool PayloadIpcClient::send_status(const ipc::StatusPayload& payload) {
     if (!m_connected.load()) return false;
     auto buffer = ipc::serialize_status(payload);
 
-#if defined(_WIN32)
     // Synchronously send status packet via overlapped I/O so loader immediately receives
     // handshake without depending on writer thread scheduling or blocking on kernel mutexes.
     std::lock_guard<std::mutex> lock(m_send_mutex);
@@ -213,9 +201,6 @@ bool PayloadIpcClient::send_status(const ipc::StatusPayload& payload) {
     log_debug("PayloadIpcClient::send_status: WriteFile ok=" + std::to_string(ok) +
               ", written=" + std::to_string(written) + "/" + std::to_string(buffer.size()));
     return (ok && written == buffer.size());
-#else
-    return enqueue_packet(std::move(buffer));
-#endif
 }
 
 void PayloadIpcClient::set_command_handler(CommandHandler handler) {
@@ -223,7 +208,6 @@ void PayloadIpcClient::set_command_handler(CommandHandler handler) {
 }
 
 void PayloadIpcClient::writer_thread_func() {
-#if defined(_WIN32)
     while (true) {
         std::vector<uint8_t> packet;
         {
@@ -268,11 +252,9 @@ void PayloadIpcClient::writer_thread_func() {
             }
         }
     }
-#endif
 }
 
 void PayloadIpcClient::reader_thread_func() {
-#if defined(_WIN32)
     constexpr size_t IPC_READ_BUFFER_SIZE = 1024;
     std::vector<uint8_t> buffer(IPC_READ_BUFFER_SIZE);
     const auto h_stop = static_cast<HANDLE>(m_stop_event);
@@ -334,7 +316,6 @@ void PayloadIpcClient::reader_thread_func() {
 
     CloseHandle(ov_read.hEvent);
     m_connected = false;
-#endif
 }
 
 } // namespace mitigator::payload
