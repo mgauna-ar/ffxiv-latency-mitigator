@@ -1,17 +1,16 @@
-name: Continuous Integration
+name: Release
 
 on:
   push:
-    branches: [ "**" ]
-  pull_request:
-    branches: [ "**" ]
+    tags:
+      - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build-windows:
-    name: Windows MSVC x64 Standalone Build
+  build-and-release:
+    name: Build and Publish Release
     runs-on: windows-2022
 
     steps:
@@ -39,12 +38,13 @@ jobs:
             exit 1
           }
 
-      - name: Upload Standalone Executable Artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ffxiv-mitigator-windows-x64
-          path: |
-            build/bin/Release/ffxiv-mitigator.exe
-            build/bin/Release/mitigator_payload.dll
-          if-no-files-found: error
+      - name: Package Release Zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build\bin\Release\ffxiv-mitigator.exe", "build\bin\Release\mitigator_payload.dll" -DestinationPath "ffxiv-mitigator-windows-x64.zip"
 
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ffxiv-mitigator-windows-x64.zip
+          generate_release_notes: true
