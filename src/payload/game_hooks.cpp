@@ -73,7 +73,50 @@ static void OnActionDispatched(uint32_t action_id, uint32_t seq) {
     }
 }
 
-// Detour implementations with SEH and RAII scope protection
+// Pure C-style leaf functions using SEH (NO C++ objects requiring unwinding to prevent MSVC C2712)
+static uint8_t SafeCallOriginalUseAction(
+    FnUseActionLocation fn,
+    game::ActionManager* self,
+    uint32_t action_type,
+    uint32_t action_id,
+    uint64_t target_id,
+    game::Vector3* target_location,
+    uint32_t extra_param,
+    uint8_t a7
+) {
+    MITIGATOR_SEH_TRY {
+        if (fn != nullptr) {
+            return fn(self, action_type, action_id, target_id, target_location, extra_param, a7);
+        }
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return 0;
+    }
+    return 0;
+}
+
+struct SafeCastState {
+    uint32_t sequence;
+    float cast_time;
+    bool is_casting;
+};
+
+static SafeCastState SafeReadActionManagerCastState(game::ActionManager* self) {
+    SafeCastState state{0, 0.0f, false};
+    MITIGATOR_SEH_TRY {
+        if (self != nullptr) {
+            state.sequence = static_cast<uint32_t>(self->current_sequence);
+            state.cast_time = (self->cast_time > 0.0f) ? self->cast_time : 0.0f;
+            state.is_casting = self->is_casting;
+        }
+    }
+    MITIGATOR_SEH_EXCEPT {
+        state = {0, 0.0f, false};
+    }
+    return state;
+}
+
+// Detour implementations with RAII scope protection
 static uint8_t DetourUseActionLocationProtected(
     game::ActionManager* self,
     uint32_t action_type,
@@ -87,47 +130,25 @@ static uint8_t DetourUseActionLocationProtected(
         s_action_manager.store(self, std::memory_order_release);
     }
 
-    if (!fp_original_use_action_location) {
-        return 0;
-    }
-
-    uint8_t ret = 0;
-    MITIGATOR_SEH_TRY {
-        ret = fp_original_use_action_location(
-            self, action_type, action_id, target_id, target_location, extra_param, a7
-        );
-    }
-    MITIGATOR_SEH_EXCEPT {
-        return 0;
-    }
+    const uint8_t ret = SafeCallOriginalUseAction(
+        fp_original_use_action_location,
+        self, action_type, action_id, target_id, target_location, extra_param, a7
+    );
 
     // Check if action was accepted and dispatched.
     if (ret != 0) {
-        const uint32_t seq = (self != nullptr) ? static_cast<uint32_t>(self->current_sequence) : 0;
-        OnActionDispatched(action_id, seq);
+        const SafeCastState cast_state = SafeReadActionManagerCastState(self);
+        OnActionDispatched(action_id, cast_state.sequence);
 
-        // Track cast initiation safely from ActionManager state
-        if (self != nullptr) {
-            float cast_time = 0.0f;
-            MITIGATOR_SEH_TRY {
-                if (self->cast_time > 0.0f) {
-                    cast_time = self->cast_time;
-                }
-            }
-            MITIGATOR_SEH_EXCEPT {
-                cast_time = 0.0f;
-            }
-
-            auto* mitigator = s_mitigator.load(std::memory_order_acquire);
-            if (mitigator != nullptr) {
-                if (cast_time > 0.0f) {
-                    mitigator->record_cast_begin(action_id, cast_time);
-                    log_debug("UseActionLocation: cast initiated action=" + std::to_string(action_id) +
-                              " cast_time=" + std::to_string(cast_time));
-                } else if (!self->is_casting) {
-                    // Instant cast or no active cast: clear any expired/interrupted cast
-                    mitigator->record_cast_end();
-                }
+        auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+        if (mitigator != nullptr) {
+            if (cast_state.cast_time > 0.0f) {
+                mitigator->record_cast_begin(action_id, cast_state.cast_time);
+                log_debug("UseActionLocation: cast initiated action=" + std::to_string(action_id) +
+                          " cast_time=" + std::to_string(cast_state.cast_time));
+            } else if (!cast_state.is_casting) {
+                // Instant cast or no active cast: clear any expired/interrupted cast
+                mitigator->record_cast_end();
             }
         }
     }
@@ -223,6 +244,39 @@ static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float o
     }
 }
 
+static float SafeReadAnimationLock(game::ActionManager* mgr) {
+    MITIGATOR_SEH_TRY {
+        if (mgr != nullptr) {
+            return mgr->animation_lock;
+        }
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return 0.0f;
+    }
+    return 0.0f;
+}
+
+static bool SafeCallOriginalReceiveActionEffect(
+    FnReceiveActionEffect fn,
+    uint32_t source_id,
+    void* source_character,
+    game::Vector3* pos,
+    game::ActionEffectHeader* effect_header,
+    void* effect_data,
+    void* targets
+) {
+    MITIGATOR_SEH_TRY {
+        if (fn != nullptr) {
+            fn(source_id, source_character, pos, effect_header, effect_data, targets);
+            return true;
+        }
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return false;
+    }
+    return false;
+}
+
 static void DetourReceiveActionEffectProtected(
     uint32_t source_id,
     void* source_character,
@@ -231,25 +285,14 @@ static void DetourReceiveActionEffectProtected(
     void* effect_data,
     void* targets
 ) {
-    float old_lock = 0.0f;
     game::ActionManager* mgr = s_action_manager.load(std::memory_order_acquire);
-    if (mgr != nullptr) {
-        MITIGATOR_SEH_TRY {
-            old_lock = mgr->animation_lock;
-        }
-        MITIGATOR_SEH_EXCEPT {
-            old_lock = 0.0f;
-        }
-    }
+    const float old_lock = SafeReadAnimationLock(mgr);
 
-    MITIGATOR_SEH_TRY {
-        if (fp_original_receive_action_effect != nullptr) {
-            fp_original_receive_action_effect(
-                source_id, source_character, pos, effect_header, effect_data, targets
-            );
-        }
-    }
-    MITIGATOR_SEH_EXCEPT {
+    const bool ok = SafeCallOriginalReceiveActionEffect(
+        fp_original_receive_action_effect,
+        source_id, source_character, pos, effect_header, effect_data, targets
+    );
+    if (!ok) {
         return;
     }
 
