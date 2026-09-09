@@ -75,11 +75,17 @@ TEST_CASE(SigScan, GameDefinitionsSignaturesParseSuccessfully) {
     const auto sig_use_fallback = mitigator::memory::Signature::parse(signatures::USE_ACTION_LOCATION_FALLBACK);
     TEST_ASSERT(!sig_use_fallback.empty());
 
+    const auto sig_use_legacy = mitigator::memory::Signature::parse(signatures::USE_ACTION_LOCATION_LEGACY);
+    TEST_ASSERT(!sig_use_legacy.empty());
+
     const auto sig_recv_primary = mitigator::memory::Signature::parse(signatures::RECEIVE_ACTION_EFFECT_PRIMARY);
     TEST_ASSERT(!sig_recv_primary.empty());
 
     const auto sig_recv_fallback = mitigator::memory::Signature::parse(signatures::RECEIVE_ACTION_EFFECT_FALLBACK);
     TEST_ASSERT(!sig_recv_fallback.empty());
+
+    const auto sig_recv_legacy = mitigator::memory::Signature::parse(signatures::RECEIVE_ACTION_EFFECT_LEGACY);
+    TEST_ASSERT(!sig_recv_legacy.empty());
 
     const auto sig_cast_begin = mitigator::memory::Signature::parse(signatures::CAST_BEGIN_PRIMARY);
     TEST_ASSERT(!sig_cast_begin.empty());
@@ -103,7 +109,7 @@ TEST_CASE(SigScan, GameDefinitionsSignaturesParseSuccessfully) {
     TEST_ASSERT(!sig_action_mgr_leg.empty());
 
     // Compile-time validation of definitions invariants
-    static_assert(definitions::TOTAL_AVAILABLE_HOOKS == 4);
+    static_assert(definitions::TOTAL_AVAILABLE_HOOKS == 2);
     static_assert(definitions::MIN_REQUIRED_PRIMARY_HOOKS == 2);
     static_assert(definitions::MIN_ACTION_EFFECT_LOCK_SECONDS > 0.0f);
 }
