@@ -73,6 +73,9 @@ if(WIN32 OR CYGWIN OR MSYS OR MINGW)
 
     add_library(minhook STATIC ${MINHOOK_SOURCES})
     target_include_directories(minhook PUBLIC src/third_party/minhook/include)
+    if(MSVC)
+        target_compile_options(minhook PRIVATE /W3 /wd4201 /wd4244 /wd4310)
+    endif()
 
     # 3b. In-Game Payload DLL
     add_library(mitigator_payload SHARED
