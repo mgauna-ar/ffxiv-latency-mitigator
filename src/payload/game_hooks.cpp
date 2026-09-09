@@ -50,9 +50,6 @@ static game::ActionManager* safe_read_action_manager_ptr(game::ActionManager** p
     }
     return nullptr;
 }
-#else
-#define FFXIV_FASTCALL
-#endif
 
 // Function pointer typedefs
 using FnUseActionLocation = uint8_t(FFXIV_FASTCALL*)(
