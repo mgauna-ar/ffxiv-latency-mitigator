@@ -20,6 +20,15 @@ namespace {
     constexpr int MAX_TEMP_CLEANUP_RETRIES = 5;
     // Delay between file deletion attempts in milliseconds
     constexpr DWORD CLEANUP_RETRY_INTERVAL_MS = 50;
+
+    std::string wstring_to_utf8(const std::wstring& wstr) {
+        if (wstr.empty()) return {};
+        const int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
+        if (size_needed <= 0) return {};
+        std::string str(static_cast<size_t>(size_needed), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), str.data(), size_needed, nullptr, nullptr);
+        return str;
+    }
 #endif
 }
 
@@ -131,7 +140,7 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
 
     if (remote_exit_code == 0 || remote_exit_code == STILL_ACTIVE) {
         m_last_error = "LoadLibraryW failed in game process (remote exit code: 0). Target path: " +
-                       std::string(dll_path.begin(), dll_path.end());
+                       wstring_to_utf8(dll_path);
         CloseHandle(h_remote_thread);
         VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
         return false;
