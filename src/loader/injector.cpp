@@ -1,6 +1,5 @@
 #include "loader/injector.hpp"
-#include <fstream>
-#include <chrono>
+#include <filesystem>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -13,10 +12,6 @@ namespace mitigator::loader {
 namespace {
     // Timeout for LoadLibraryW execution in the target process
     constexpr DWORD INJECTION_THREAD_TIMEOUT_MS = 10000;
-    // Number of retry attempts when deleting temp payload DLL on exit
-    constexpr int MAX_TEMP_CLEANUP_RETRIES = 5;
-    // Delay between file deletion attempts in milliseconds
-    constexpr DWORD CLEANUP_RETRY_INTERVAL_MS = 50;
 
     std::string wstring_to_utf8(const std::wstring& wstr) {
         if (wstr.empty()) return {};
@@ -28,36 +23,24 @@ namespace {
     }
 }
 
-DllInjector::~DllInjector() {
-    cleanup();
-}
-
-bool DllInjector::inject(const ProcessInfo& proc, std::span<const uint8_t> dll_bytes) {
-    if (dll_bytes.empty() || proc.handle == nullptr) {
-        m_last_error = "Embedded payload is empty or process handle is invalid";
+bool DllInjector::inject(const ProcessInfo& proc, const std::filesystem::path& dll_path) {
+    if (!proc.handle) {
+        m_last_error = "Invalid process handle.";
         return false;
     }
 
-    const std::wstring temp_dll = write_temp_dll(dll_bytes, proc.pid);
-    if (temp_dll.empty()) {
-        m_last_error = "Failed to write embedded payload DLL to %TEMP%";
+    std::error_code ec;
+    const auto abs_path = std::filesystem::absolute(dll_path, ec);
+    if (ec || !std::filesystem::exists(abs_path, ec)) {
+        m_last_error = "Payload DLL does not exist: " + dll_path.string();
         return false;
     }
 
-    m_temp_path = temp_dll;
-    return inject_from_file(proc, temp_dll);
-}
-
-bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& dll_path) {
-    if (!proc.handle || dll_path.empty()) {
-        m_last_error = "Invalid process handle or empty DLL path.";
-        return false;
-    }
-
+    const std::wstring full_path_w = abs_path.wstring();
     m_target_process_handle = proc.handle;
     const auto h_process = static_cast<HANDLE>(proc.handle);
 
-    const size_t path_size_bytes = (dll_path.length() + 1) * sizeof(wchar_t);
+    const size_t path_size_bytes = (full_path_w.length() + 1) * sizeof(wchar_t);
 
     // 1. Allocate remote memory in game process for DLL path
     LPVOID p_remote_path = VirtualAllocEx(
@@ -74,7 +57,7 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
 
     // 2. Write DLL path to remote process memory
     SIZE_T bytes_written = 0;
-    if (!WriteProcessMemory(h_process, p_remote_path, dll_path.c_str(), path_size_bytes, &bytes_written) ||
+    if (!WriteProcessMemory(h_process, p_remote_path, full_path_w.c_str(), path_size_bytes, &bytes_written) ||
         bytes_written != path_size_bytes) {
         m_last_error = "WriteProcessMemory failed (Win32 Error: " + std::to_string(GetLastError()) + ")";
         VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
@@ -135,7 +118,7 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
 
     if (remote_exit_code == 0 || remote_exit_code == STILL_ACTIVE) {
         m_last_error = "LoadLibraryW failed in game process (remote exit code: 0). Target path: " +
-                       wstring_to_utf8(dll_path);
+                       wstring_to_utf8(full_path_w);
         CloseHandle(h_remote_thread);
         VirtualFreeEx(h_process, p_remote_path, 0, MEM_RELEASE);
         return false;
@@ -147,76 +130,6 @@ bool DllInjector::inject_from_file(const ProcessInfo& proc, const std::wstring& 
     m_remote_hmodule = static_cast<uintptr_t>(remote_exit_code);
     m_last_error = "OK";
     return true;
-}
-
-std::wstring DllInjector::write_temp_dll(std::span<const uint8_t> dll_bytes, uint32_t pid) {
-    wchar_t temp_dir[MAX_PATH];
-    if (GetTempPathW(MAX_PATH, temp_dir) == 0) {
-        return L"";
-    }
-
-    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
-
-    std::wstring dll_file_path = std::wstring(temp_dir) + L"ffxiv_mitigator_payload_" +
-                                 std::to_wstring(pid) + L"_" + std::to_wstring(now_ms) + L".dll";
-
-    // Initialize an open NULL DACL so the game process can map and read the DLL
-    // regardless of whether game and loader run under different integrity levels.
-    SECURITY_DESCRIPTOR sd{};
-    InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
-    SetSecurityDescriptorDacl(&sd, TRUE, nullptr, FALSE);
-
-    SECURITY_ATTRIBUTES sa{};
-    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-    sa.lpSecurityDescriptor = &sd;
-    sa.bInheritHandle = FALSE;
-
-    HANDLE h_file = CreateFileW(
-        dll_file_path.c_str(),
-        GENERIC_WRITE,
-        FILE_SHARE_READ,
-        &sa,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr
-    );
-
-    if (h_file == INVALID_HANDLE_VALUE) {
-        return L"";
-    }
-
-    DWORD written = 0;
-    const BOOL ok = WriteFile(
-        h_file,
-        dll_bytes.data(),
-        static_cast<DWORD>(dll_bytes.size()),
-        &written,
-        nullptr
-    );
-
-    if (ok) {
-        FlushFileBuffers(h_file);
-    }
-    CloseHandle(h_file);
-
-    // Brief delay to ensure filesystem cache and filter drivers release any inspection handles
-    Sleep(20);
-
-    return (ok && written == dll_bytes.size()) ? dll_file_path : L"";
-}
-
-void DllInjector::cleanup() {
-    if (!m_temp_path.empty()) {
-        for (int i = 0; i < MAX_TEMP_CLEANUP_RETRIES; ++i) {
-            if (DeleteFileW(m_temp_path.c_str())) {
-                break;
-            }
-            Sleep(CLEANUP_RETRY_INTERVAL_MS);
-        }
-        m_temp_path.clear();
-    }
 }
 
 bool DllInjector::is_payload_already_loaded(const ProcessInfo& proc) {

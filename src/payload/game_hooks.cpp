@@ -71,9 +71,23 @@ using FnReceiveActionEffect = void(FFXIV_FASTCALL*)(
     void* targets
 );
 
+using FnCastBegin = uint8_t(FFXIV_FASTCALL*)(
+    game::ActionManager* self,
+    uint32_t action_type,
+    uint32_t action_id,
+    float cast_time,
+    uint64_t target_id
+);
+
+using FnCastInterrupt = void(FFXIV_FASTCALL*)(
+    game::ActionManager* self
+);
+
 // Trampolines
 FnUseActionLocation fp_original_use_action_location = nullptr;
 FnReceiveActionEffect fp_original_receive_action_effect = nullptr;
+FnCastBegin fp_original_cast_begin = nullptr;
+FnCastInterrupt fp_original_cast_interrupt = nullptr;
 
 static void OnActionDispatched(uint32_t action_id, uint32_t seq) {
     auto* mitigator = s_mitigator.load(std::memory_order_acquire);
@@ -245,6 +259,80 @@ void FFXIV_FASTCALL DetourReceiveActionEffect(
     );
 }
 
+static uint8_t DetourCastBeginProtected(
+    game::ActionManager* self,
+    uint32_t action_type,
+    uint32_t action_id,
+    float cast_time,
+    uint64_t target_id
+) {
+    if (self != nullptr) {
+        s_action_manager.store(self, std::memory_order_release);
+    }
+
+    if (!fp_original_cast_begin) {
+        return 0;
+    }
+
+    uint8_t ret = 0;
+    MITIGATOR_SEH_TRY {
+        ret = fp_original_cast_begin(self, action_type, action_id, cast_time, target_id);
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return 0;
+    }
+
+    auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+    if (mitigator != nullptr) {
+        float effective_cast_time = cast_time;
+        if (self != nullptr && self->cast_time > 0.0f) {
+            effective_cast_time = self->cast_time;
+        }
+        mitigator->record_cast_begin(action_id, effective_cast_time);
+        log_debug("CastBegin: action=" + std::to_string(action_id) +
+                  " cast_time=" + std::to_string(effective_cast_time));
+    }
+
+    return ret;
+}
+
+uint8_t FFXIV_FASTCALL DetourCastBegin(
+    game::ActionManager* self,
+    uint32_t action_type,
+    uint32_t action_id,
+    float cast_time,
+    uint64_t target_id
+) {
+    DetourScope scope;
+    return DetourCastBeginProtected(self, action_type, action_id, cast_time, target_id);
+}
+
+static void DetourCastInterruptProtected(game::ActionManager* self) {
+    if (self != nullptr) {
+        s_action_manager.store(self, std::memory_order_release);
+    }
+
+    MITIGATOR_SEH_TRY {
+        if (fp_original_cast_interrupt != nullptr) {
+            fp_original_cast_interrupt(self);
+        }
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return;
+    }
+
+    auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+    if (mitigator != nullptr) {
+        mitigator->record_cast_interrupt();
+        log_debug("CastInterrupt: active cast aborted");
+    }
+}
+
+void FFXIV_FASTCALL DetourCastInterrupt(game::ActionManager* self) {
+    DetourScope scope;
+    DetourCastInterruptProtected(self);
+}
+
 } // anonymous namespace
 
 HookManager& HookManager::instance() {
@@ -330,7 +418,61 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         }
     }
 
-    // 3. Attempt initial static pointer acquisition for ActionManager
+    // 3. Hook CastBegin
+    const auto sig_cast_begin = memory::Signature::parse(game::signatures::CAST_BEGIN_PRIMARY);
+    uintptr_t addr_cast_begin = memory::scan_module_section(nullptr, sig_cast_begin);
+    if (addr_cast_begin == 0) {
+        const auto sig_fallback = memory::Signature::parse(game::signatures::CAST_BEGIN_FALLBACK);
+        addr_cast_begin = memory::scan_module_section(nullptr, sig_fallback);
+    }
+    log_debug("HookManager: CastBegin sig addr=" + (addr_cast_begin ? std::to_string(addr_cast_begin) : "NOT FOUND"));
+
+    if (addr_cast_begin != 0 && *reinterpret_cast<const uint8_t*>(addr_cast_begin) == 0xE8) {
+        const uintptr_t target = memory::resolve_call_relative(addr_cast_begin);
+        log_debug("HookManager: CastBegin call-site resolved -> " + std::to_string(target));
+        addr_cast_begin = target;
+    }
+
+    if (addr_cast_begin != 0) {
+        const auto status = MH_CreateHook(
+            reinterpret_cast<LPVOID>(addr_cast_begin),
+            reinterpret_cast<LPVOID>(&DetourCastBegin),
+            reinterpret_cast<LPVOID*>(&fp_original_cast_begin)
+        );
+        log_debug("HookManager: MH_CreateHook(CastBegin) result: " + std::to_string(status));
+        if (status == MH_OK) {
+            ++hooked;
+        }
+    }
+
+    // 4. Hook CastInterrupt
+    const auto sig_cast_interrupt = memory::Signature::parse(game::signatures::CAST_INTERRUPT_PRIMARY);
+    uintptr_t addr_cast_interrupt = memory::scan_module_section(nullptr, sig_cast_interrupt);
+    if (addr_cast_interrupt == 0) {
+        const auto sig_fallback = memory::Signature::parse(game::signatures::CAST_INTERRUPT_FALLBACK);
+        addr_cast_interrupt = memory::scan_module_section(nullptr, sig_fallback);
+    }
+    log_debug("HookManager: CastInterrupt sig addr=" + (addr_cast_interrupt ? std::to_string(addr_cast_interrupt) : "NOT FOUND"));
+
+    if (addr_cast_interrupt != 0 && *reinterpret_cast<const uint8_t*>(addr_cast_interrupt) == 0xE8) {
+        const uintptr_t target = memory::resolve_call_relative(addr_cast_interrupt);
+        log_debug("HookManager: CastInterrupt call-site resolved -> " + std::to_string(target));
+        addr_cast_interrupt = target;
+    }
+
+    if (addr_cast_interrupt != 0) {
+        const auto status = MH_CreateHook(
+            reinterpret_cast<LPVOID>(addr_cast_interrupt),
+            reinterpret_cast<LPVOID>(&DetourCastInterrupt),
+            reinterpret_cast<LPVOID*>(&fp_original_cast_interrupt)
+        );
+        log_debug("HookManager: MH_CreateHook(CastInterrupt) result: " + std::to_string(status));
+        if (status == MH_OK) {
+            ++hooked;
+        }
+    }
+
+    // 5. Attempt initial static pointer acquisition for ActionManager
     uintptr_t addr_action_mgr_insn = 0;
     const auto sig_action_mgr_prim = memory::Signature::parse(game::signatures::ACTION_MANAGER_INSTANCE_PRIMARY);
     addr_action_mgr_insn = memory::scan_module_section(nullptr, sig_action_mgr_prim);
@@ -367,8 +509,10 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         }
     }
 
-    // Both UseActionLocation and ReceiveActionEffect are strictly required for latency mitigation
-    const bool primary_hooks_ok = (addr_use_action != 0 && addr_recv_effect != 0 && hooked >= game::definitions::MIN_REQUIRED_PRIMARY_HOOKS);
+    // All 4 hooks are required for safe and complete latency mitigation
+    const bool primary_hooks_ok = (addr_use_action != 0 && addr_recv_effect != 0 &&
+                                   addr_cast_begin != 0 && addr_cast_interrupt != 0 &&
+                                   hooked >= game::definitions::MIN_REQUIRED_PRIMARY_HOOKS);
     if (primary_hooks_ok) {
         MH_EnableHook(MH_ALL_HOOKS);
         m_hook_count = hooked;
@@ -378,14 +522,16 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         return true;
     }
 
-    if (addr_use_action == 0 && addr_recv_effect == 0) {
-        m_last_error = "Signatures not found: UseActionLocation & ReceiveActionEffect";
-    } else if (addr_use_action == 0) {
+    if (addr_use_action == 0) {
         m_last_error = "Signature not found: UseActionLocation";
     } else if (addr_recv_effect == 0) {
         m_last_error = "Signature not found: ReceiveActionEffect";
+    } else if (addr_cast_begin == 0) {
+        m_last_error = "Signature not found: CastBegin";
+    } else if (addr_cast_interrupt == 0) {
+        m_last_error = "Signature not found: CastInterrupt";
     } else if (hooked < game::definitions::MIN_REQUIRED_PRIMARY_HOOKS) {
-        m_last_error = "MinHook failed to install primary hooks";
+        m_last_error = "MinHook failed to install required hooks";
     } else {
         m_last_error = "Hook installation failed";
     }
@@ -422,6 +568,8 @@ void HookManager::uninstall() {
 
     fp_original_use_action_location = nullptr;
     fp_original_receive_action_effect = nullptr;
+    fp_original_cast_begin = nullptr;
+    fp_original_cast_interrupt = nullptr;
     s_action_manager.store(nullptr, std::memory_order_release);
     s_mitigator.store(nullptr, std::memory_order_release);
     s_ipc.store(nullptr, std::memory_order_release);

@@ -27,14 +27,14 @@ This project implements an **In-Memory Detour Architecture** packaged inside a s
 ```
 [ ffxiv-mitigator.exe (Loader & Telemetry Console) ]
   ├── 1. Discovers ffxiv_dx11.exe via Toolhelp32 snapshot
-  ├── 2. Extracts embedded payload DLL in memory (zero external DLL files)
+  ├── 2. Locates adjacent mitigator_payload.dll in the same directory
   ├── 3. Injects payload via Win32 VirtualAllocEx + CreateRemoteThread
   ├── 4. Establishes Windows Named Pipe (\\\\.\\pipe\\ffxiv_mitigator_ipc)
   └── 5. Displays Live Telemetry Dashboard & handles hotkeys [Q], [D], [L], [C]
           │
           ▼ IPC Stream
 [ ffxiv_dx11.exe (Game Process) ]
-  └── [ mitigator_payload.dll (Embedded Detour Engine) ]
+  └── [ mitigator_payload.dll (In-Game Detour Engine) ]
         ├── AOB Signature Scanner (dynamically locates game routines)
         ├── MinHook Detours:
         │     ├── UseActionLocation (captures ActionManager* and records timestamps)
@@ -67,7 +67,6 @@ For technical details on codebase structure, single-responsibility file boundari
 - **Windows 10 / 11 (64-bit)**
 - **Visual Studio 2022** (with C++20 MSVC v143 toolset)
 - **CMake 3.20+**
-- **Python 3.8+** (for embedding payload bytes into loader)
 
 ### Build Commands
 
@@ -82,9 +81,10 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The resulting standalone executable will be located at:
+The resulting binaries will be located side-by-side at:
 ```
-build\Release\ffxiv-mitigator.exe
+build\bin\Release\ffxiv-mitigator.exe
+build\bin\Release\mitigator_payload.dll
 ```
 
 ### Cross-Platform Unit Tests (macOS / Linux / Windows)
@@ -98,7 +98,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
   src/core/cast_tracker.cpp \
   src/core/animation_lock.cpp \
   src/core/ipc_protocol.cpp \
-  src/payload/sigscan.cpp \
+  src/core/sigscan.cpp \
   tests/test_rolling_rtt.cpp \
   tests/test_sequence_tracker.cpp \
   tests/test_cast_tracker.cpp \
@@ -115,8 +115,8 @@ clang++ -std=c++20 -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
 
 ### Quick Start
 1. Start Final Fantasy XIV (`ffxiv_dx11.exe`).
-2. Run `ffxiv-mitigator.exe` as Administrator (required for Win32 process injection permissions).
-3. The console will detect the game, inject the embedded payload, hook the detours, and begin streaming live telemetry.
+2. Ensure `ffxiv-mitigator.exe` and `mitigator_payload.dll` are in the same folder, and run `ffxiv-mitigator.exe` as Administrator (required for Win32 process injection permissions).
+3. The console will detect the game, inject the adjacent payload DLL, hook the detours, and begin streaming live telemetry.
 
 ### CLI Options
 

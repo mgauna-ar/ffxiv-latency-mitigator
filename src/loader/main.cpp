@@ -4,7 +4,6 @@
 #include "loader/injector.hpp"
 #include "loader/loader_ipc.hpp"
 #include "loader/ui_renderer.hpp"
-#include "loader/embedded_payload.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -66,7 +65,6 @@ void print_payload_log(mitigator::loader::UiRenderer& ui) {
     }
 }
 
-constexpr size_t MIN_EMBEDDED_PAYLOAD_SIZE = 100;
 constexpr int MAX_HANDSHAKE_WAIT_TICKS = 150;
 constexpr auto HANDSHAKE_POLL_INTERVAL = std::chrono::milliseconds(100);
 constexpr auto HOTKEY_POLL_INTERVAL = std::chrono::milliseconds(50);
@@ -223,11 +221,9 @@ int main(int argc, char* argv[]) {
         DeleteFileW(log_path.c_str());
     }
 
-    // Inject payload DLL
+    // Inject payload DLL from directory adjacent to executable
     mitigator::loader::DllInjector injector;
-    const auto embedded_dll = mitigator::loader::get_embedded_payload();
 
-    // Check if mitigator_payload.dll is present next to the executable
     std::filesystem::path disk_payload_path;
     wchar_t module_file[MAX_PATH];
     if (GetModuleFileNameW(nullptr, module_file, MAX_PATH) != 0) {
@@ -237,20 +233,18 @@ int main(int argc, char* argv[]) {
             disk_payload_path = candidate;
         }
     }
-    if (disk_payload_path.empty() && std::filesystem::exists("mitigator_payload.dll")) {
-        disk_payload_path = std::filesystem::absolute("mitigator_payload.dll");
+
+    if (disk_payload_path.empty()) {
+        ui.log_status("mitigator_payload.dll was not found!", true);
+        ui.log_status("Please ensure 'mitigator_payload.dll' is placed in the same folder as ffxiv-mitigator.exe.", false);
+        ipc_server.stop();
+        if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
+        wait_for_user_exit();
+        return 1;
     }
 
-    bool injected = false;
-    if (!disk_payload_path.empty()) {
-        std::cout << "[*] Injecting payload from disk: " << disk_payload_path.string() << "...\n";
-        injected = injector.inject_from_file(*proc, disk_payload_path.wstring());
-    } else if (embedded_dll.size() > MIN_EMBEDDED_PAYLOAD_SIZE) {
-        std::cout << "[*] Injecting embedded payload (" << embedded_dll.size() << " bytes)...\n";
-        injected = injector.inject(*proc, embedded_dll);
-    } else {
-        ui.log_status("No payload DLL found (neither embedded nor on disk).", true);
-    }
+    std::cout << "[*] Injecting payload: " << disk_payload_path.string() << "...\n";
+    const bool injected = injector.inject(*proc, disk_payload_path);
 
     if (!injected) {
         ui.log_status("Failed to inject payload DLL into game process.", true);

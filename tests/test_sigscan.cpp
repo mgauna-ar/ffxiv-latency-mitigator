@@ -109,7 +109,7 @@ TEST_CASE(SigScan, GameDefinitionsSignaturesParseSuccessfully) {
     TEST_ASSERT(!sig_action_mgr_leg.empty());
 
     // Compile-time validation of definitions invariants
-    static_assert(definitions::TOTAL_AVAILABLE_HOOKS == 2);
-    static_assert(definitions::MIN_REQUIRED_PRIMARY_HOOKS == 2);
+    static_assert(definitions::TOTAL_AVAILABLE_HOOKS == 4);
+    static_assert(definitions::MIN_REQUIRED_PRIMARY_HOOKS == 4);
     static_assert(definitions::MIN_ACTION_EFFECT_LOCK_SECONDS > 0.0f);
 }

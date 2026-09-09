@@ -1,6 +1,7 @@
 #include "mitigator/rolling_rtt.hpp"
 #include "mitigator/types.hpp"
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <cmath>
 
@@ -56,6 +57,22 @@ double RollingRttTracker::get_median_rtt_ms() const {
         return m_smoothed_rtt;
     }
 
+    const size_t n = m_samples.size();
+    constexpr size_t STACK_BUFFER_SIZE = 64;
+
+    if (n <= STACK_BUFFER_SIZE) {
+        std::array<double, STACK_BUFFER_SIZE> stack_buf;
+        std::copy(m_samples.begin(), m_samples.end(), stack_buf.begin());
+        std::sort(stack_buf.begin(), stack_buf.begin() + n);
+
+        const size_t mid = n / 2;
+        if (n % 2 == 0) {
+            return (stack_buf[mid - 1] + stack_buf[mid]) / 2.0;
+        }
+        return stack_buf[mid];
+    }
+
+    // Fallback for unusually large custom sample windows (> 64)
     std::vector<double> sorted(m_samples.begin(), m_samples.end());
     std::sort(sorted.begin(), sorted.end());
 

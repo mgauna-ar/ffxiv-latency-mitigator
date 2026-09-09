@@ -18,11 +18,11 @@ namespace definitions {
     constexpr size_t ACTION_MGR_RIP_DISP_OFFSET = 3;
     constexpr size_t ACTION_MGR_RIP_INSN_LEN = 7;
 
-    /// Total number of detours managed by HookManager (UseActionLocation and ReceiveActionEffect)
-    constexpr uint32_t TOTAL_AVAILABLE_HOOKS = 2;
+    /// Total number of detours managed by HookManager (UseActionLocation, ReceiveActionEffect, CastBegin, CastInterrupt)
+    constexpr uint32_t TOTAL_AVAILABLE_HOOKS = 4;
 
     /// Minimum number of primary hooks required to perform latency mitigation
-    constexpr uint32_t MIN_REQUIRED_PRIMARY_HOOKS = 2;
+    constexpr uint32_t MIN_REQUIRED_PRIMARY_HOOKS = 4;
 
     /// Minimum animation lock threshold in seconds for local player action effect detection
     constexpr float MIN_ACTION_EFFECT_LOCK_SECONDS = 0.01f;

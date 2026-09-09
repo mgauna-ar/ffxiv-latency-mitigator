@@ -77,6 +77,10 @@ if(WIN32 OR CYGWIN OR MSYS OR MINGW)
         target_compile_options(minhook PRIVATE /W3 /wd4201 /wd4244 /wd4310)
     endif()
 
+    # Ensure both DLL and executable output to the same directory for direct adjacent loading
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
     # 3b. In-Game Payload DLL
     add_library(mitigator_payload SHARED
         src/payload/dllmain.cpp
@@ -96,39 +100,18 @@ if(WIN32 OR CYGWIN OR MSYS OR MINGW)
         minhook
     )
 
-    # 3c. Payload DLL Byte-Embedding Header Generation
-    set(EMBEDDED_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_payload_generated.hpp")
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
-
-    add_custom_command(
-        OUTPUT "${EMBEDDED_HEADER}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
-        COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_dll.py"
-                "$<TARGET_FILE:mitigator_payload>"
-                "${EMBEDDED_HEADER}"
-        DEPENDS mitigator_payload "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_dll.py"
-        COMMENT "Embedding mitigator_payload.dll into C++ header..."
-        VERBATIM
-    )
-
-    add_custom_target(generate_embedded_payload DEPENDS "${EMBEDDED_HEADER}")
-
-    # 3d. Standalone Console Loader
+    # 3c. Standalone Console Loader
     add_executable(ffxiv-mitigator
         src/loader/main.cpp
         src/loader/process_finder.cpp
         src/loader/injector.cpp
         src/loader/loader_ipc.cpp
         src/loader/ui_renderer.cpp
-        "${EMBEDDED_HEADER}"
     )
-
-    add_dependencies(ffxiv-mitigator generate_embedded_payload)
 
     target_include_directories(ffxiv-mitigator PRIVATE
         include
         src
-        "${CMAKE_CURRENT_BINARY_DIR}/generated"
     )
 
     target_link_libraries(ffxiv-mitigator PRIVATE mitigator_core advapi32)

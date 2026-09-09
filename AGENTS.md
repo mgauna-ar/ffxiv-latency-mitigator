@@ -22,11 +22,10 @@ This document outlines the architectural patterns, engineering principles, memor
    - No undefined behavior or calling-convention mismatches (e.g., ensure `CreateThread` callback signatures strictly match `DWORD WINAPI (*)(LPVOID)`).
 
 4. **Zero-Dependency Runtime Constraint**:
-   - The project must produce a single, self-contained executable (`ffxiv-mitigator.exe`) that runs on Windows 10/11 without requiring:
+   - The project produces a standalone executable (`ffxiv-mitigator.exe`) accompanied by its in-game payload DLL (`mitigator_payload.dll`) placed in the same directory, running on Windows 10/11 without requiring:
      - External plugin injectors (Dalamud, XIVLauncher).
      - Kernel filter drivers (WinDivert).
      - Microsoft Visual C++ Redistributable packages (statically linked `/MT` runtime).
-   - In-game payload DLL (`mitigator_payload.dll`) is embedded into the loader executable as a `constexpr` byte array during build via `tools/embed_dll.py`.
 
 ---
 
@@ -41,12 +40,12 @@ This document outlines the architectural patterns, engineering principles, memor
 | **Cast Tracker** | `include/mitigator/cast_tracker.hpp`<br>`src/core/cast_tracker.cpp` | Tracks active spell casting states to preserve cast-lock durations (slide-casting) |
 | **Animation Lock** | `include/mitigator/animation_lock.hpp`<br>`src/core/animation_lock.cpp` | Core mitigation formula, anti-cheat safety floors, ceiling clamping, dry-run mode |
 | **IPC Protocol** | `include/mitigator/ipc_protocol.hpp`<br>`src/core/ipc_protocol.cpp` | Fixed-size binary packet framing, serialization, and deserialization |
-| **Signature Scanner** | `include/mitigator/sigscan.hpp`<br>`src/payload/sigscan.cpp` | IDA-style AOB pattern scanning, PE section matching, and RIP-relative address resolution |
+| **Signature Scanner** | `include/mitigator/sigscan.hpp`<br>`src/core/sigscan.cpp` | IDA-style AOB pattern scanning, PE section matching, and RIP-relative address resolution |
 | **Game Hooks** | `src/payload/game_hooks.hpp`<br>`src/payload/game_hooks.cpp` | MinHook detours for `UseActionLocation`, `ReceiveActionEffect`, `CastBegin`, `CastInterrupt` |
 | **Payload IPC Client** | `src/payload/payload_ipc.hpp`<br>`src/payload/payload_ipc.cpp` | In-game Named Pipe client thread streaming telemetry to the loader |
 | **Payload Entry** | `src/payload/dllmain.cpp` | Injected DLL lifecycle, background orchestration, and clean unhooking (`FreeLibraryAndExitThread`) |
 | **Process Finder** | `src/loader/process_finder.hpp`<br>`src/loader/process_finder.cpp` | Win32 Toolhelp32 process snapshot scanning and 64-bit architecture validation |
-| **DLL Injector** | `src/loader/injector.hpp`<br>`src/loader/injector.cpp` | Writes embedded DLL to `%TEMP%` and executes `CreateRemoteThread` + `LoadLibraryW` with cleanup retry |
+| **DLL Injector** | `src/loader/injector.hpp`<br>`src/loader/injector.cpp` | Injects adjacent payload DLL into the game process via `CreateRemoteThread` + `LoadLibraryW` |
 | **Loader IPC Server** | `src/loader/loader_ipc.hpp`<br>`src/loader/loader_ipc.cpp` | Named Pipe server, thread-safe command dispatch, and graceful wake-up on shutdown |
 | **UI Renderer** | `src/loader/ui_renderer.hpp`<br>`src/loader/ui_renderer.cpp` | Formatted ANSI console UI, rolling telemetry logs, and summary statistics |
 | **Loader Entry** | `src/loader/main.cpp` | CLI parsing, signal handling, and interactive non-blocking hotkey event loop |
@@ -103,7 +102,7 @@ Or directly with Clang:
 ```bash
 clang++ -std=c++20 -Wall -Wextra -Wpedantic -Werror \
   -Iinclude -Isrc -Itests \
-  src/core/*.cpp src/payload/sigscan.cpp tests/*.cpp \
+  src/core/*.cpp tests/*.cpp \
   -o test_runner && ./test_runner
 ```
 

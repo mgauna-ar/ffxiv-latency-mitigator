@@ -2,36 +2,25 @@
 
 #include "loader/process_finder.hpp"
 #include <string>
-#include <vector>
-#include <span>
+#include <filesystem>
 
 namespace mitigator::loader {
 
 /**
- * @brief Injects the embedded payload DLL into the running game process.
+ * @brief Injects the mitigator payload DLL into the running game process.
  */
 class DllInjector {
 public:
     DllInjector() = default;
-    ~DllInjector();
+    ~DllInjector() = default;
 
     /**
-     * @brief Injects embedded payload DLL bytes into target process.
+     * @brief Injects a payload DLL file from disk into target process.
      * @param proc ProcessInfo containing valid handle and pid.
-     * @param dll_bytes Span of raw DLL file bytes.
+     * @param dll_path Path to the payload DLL file on disk.
      * @return true if injection succeeded and payload is running.
      */
-    bool inject(const ProcessInfo& proc, std::span<const uint8_t> dll_bytes);
-
-    /**
-     * @brief Injects an existing DLL file on disk.
-     */
-    bool inject_from_file(const ProcessInfo& proc, const std::wstring& dll_path);
-
-    /**
-     * @brief Cleans up temporary files and remote references.
-     */
-    void cleanup();
+    bool inject(const ProcessInfo& proc, const std::filesystem::path& dll_path);
 
     /**
      * @brief Checks if a mitigator payload DLL is already loaded in the target process.
@@ -45,11 +34,8 @@ public:
     [[nodiscard]] const std::string& last_error() const { return m_last_error; }
 
 private:
-    std::wstring write_temp_dll(std::span<const uint8_t> dll_bytes, uint32_t pid);
-
     std::string m_last_error;
     uintptr_t m_remote_hmodule{0};
-    std::wstring m_temp_path;
     [[maybe_unused]] void* m_target_process_handle{nullptr};
 };
 
