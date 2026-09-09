@@ -60,8 +60,8 @@ When a server action effect arrives:
 ## Usage
 
 ### Quick Start
-1. **Download the latest release binaries** (`ffxiv-mitigator.exe` and `mitigator_payload.dll`) from the GitHub Releases tab, or [build from source](#building-from-source).
-2. Ensure `ffxiv-mitigator.exe` and `mitigator_payload.dll` are placed in the **same directory**.
+1. **Download the latest release** (`ffxiv-mitigator-windows-x64.zip`) from the GitHub Releases tab (or [build from source](#building-from-source)).
+2. Extract the ZIP into a folder of your choice (ensuring `ffxiv-mitigator.exe` and `mitigator_payload.dll` remain side-by-side).
 3. Launch Final Fantasy XIV (`ffxiv_dx11.exe`).
 4. Run `ffxiv-mitigator.exe` as **Administrator** (required for Win32 process injection permissions).
 5. The console will detect the game, inject the adjacent payload DLL, hook the detours, and begin streaming live telemetry.
