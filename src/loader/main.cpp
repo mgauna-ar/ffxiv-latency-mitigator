@@ -6,7 +6,6 @@
 #include "loader/ui_renderer.hpp"
 
 #include <iostream>
-#include <fstream>
 #include <string>
 #include <chrono>
 #include <thread>
@@ -40,27 +39,6 @@ void wait_for_user_exit() {
         if (proc_id == GetCurrentProcessId()) {
             std::cout << "\nPress any key to exit...\n";
             _getch();
-        }
-    }
-}
-
-void print_payload_log(mitigator::loader::UiRenderer& ui) {
-    wchar_t temp_dir[MAX_PATH];
-    if (GetTempPathW(MAX_PATH, temp_dir) != 0) {
-        const std::wstring log_path = std::wstring(temp_dir) + L"ffxiv_mitigator_payload.log";
-        std::ifstream f(log_path);
-        if (f.is_open()) {
-            ui.log_status("--- Injected Payload Diagnostic Log ---", false);
-            std::string line;
-            while (std::getline(f, line)) {
-                if (!line.empty()) {
-                    ui.log_status("  " + line, false);
-                }
-            }
-            ui.log_status("---------------------------------------", false);
-        } else {
-            ui.log_status("No payload diagnostic log was found in %TEMP%.", false);
-            ui.log_status("This suggests DllMain did not execute (remote thread may have been blocked).", false);
         }
     }
 }
@@ -214,12 +192,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Clean up any stale diagnostic log from a previous session
-    wchar_t temp_dir[MAX_PATH];
-    if (GetTempPathW(MAX_PATH, temp_dir) != 0) {
-        const std::wstring log_path = std::wstring(temp_dir) + L"ffxiv_mitigator_payload.log";
-        DeleteFileW(log_path.c_str());
-    }
 
     // Inject payload DLL from directory adjacent to executable
     mitigator::loader::DllInjector injector;
@@ -251,7 +223,7 @@ int main(int argc, char* argv[]) {
         if (!injector.last_error().empty()) {
             ui.log_status("Reason: " + injector.last_error(), false);
         }
-        print_payload_log(ui);
+
         ipc_server.stop();
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
         wait_for_user_exit();
@@ -271,7 +243,7 @@ int main(int argc, char* argv[]) {
     const auto last_status = ipc_server.last_status();
     if (last_status.has_value() && last_status->hooks_installed < mitigator::game::definitions::MIN_REQUIRED_PRIMARY_HOOKS) {
         // Detour installation failed in game; status callback already displayed diagnostic
-        print_payload_log(ui);
+
         ipc_server.stop();
         if (proc->handle) CloseHandle(static_cast<HANDLE>(proc->handle));
         wait_for_user_exit();
@@ -280,7 +252,7 @@ int main(int argc, char* argv[]) {
 
     if (!ipc_server.has_received_status()) {
         ui.log_status("Handshake timed out. Injected payload did not establish IPC telemetry.", true);
-        print_payload_log(ui);
+
         ui.log_status("Possible causes:", true);
         ui.log_status("  1. Privilege mismatch: Ensure both game and mitigator are run with matching privileges (e.g. Run as administrator).", false);
         ui.log_status("  2. Antivirus or security software blocked remote thread execution.", false);

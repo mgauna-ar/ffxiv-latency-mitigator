@@ -1,5 +1,5 @@
 #include "payload/payload_ipc.hpp"
-#include "payload/payload_logger.hpp"
+
 #include <chrono>
 #include <algorithm>
 
@@ -22,10 +22,9 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         return true;
     }
 
-    log_debug("PayloadIpcClient::connect: connecting to pipe " + std::string(m_pipe_name));
+
     const auto start_time = std::chrono::steady_clock::now();
     HANDLE hPipe = INVALID_HANDLE_VALUE;
-    DWORD last_logged_err = 0;
 
     m_stop_event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
     if (!m_stop_event) {
@@ -48,10 +47,6 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         }
 
         const DWORD err = GetLastError();
-        if (err != last_logged_err) {
-            log_debug("PayloadIpcClient::connect: CreateFileA failed, Win32 Error: " + std::to_string(err));
-            last_logged_err = err;
-        }
 
         const auto elapsed_ms = static_cast<uint32_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -60,7 +55,6 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         );
 
         if (elapsed_ms >= timeout_ms) {
-            log_debug("PayloadIpcClient::connect: timeout expired (" + std::to_string(timeout_ms) + "ms), aborting.");
             if (m_stop_event) {
                 CloseHandle(static_cast<HANDLE>(m_stop_event));
                 m_stop_event = nullptr;
@@ -77,13 +71,10 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         }
     }
 
-    log_debug("PayloadIpcClient::connect: CreateFileA succeeded! Setting message-read mode...");
 
     // Set message-read mode
     DWORD mode = PIPE_READMODE_MESSAGE;
     if (!SetNamedPipeHandleState(hPipe, &mode, nullptr, nullptr)) {
-        const DWORD err = GetLastError();
-        log_debug("PayloadIpcClient::connect: SetNamedPipeHandleState failed, Win32 Error: " + std::to_string(err));
         CloseHandle(hPipe);
         if (m_stop_event) {
             CloseHandle(static_cast<HANDLE>(m_stop_event));
@@ -92,7 +83,6 @@ bool PayloadIpcClient::connect(uint32_t timeout_ms) {
         return false;
     }
 
-    log_debug("PayloadIpcClient::connect: SetNamedPipeHandleState succeeded. IPC channel open!");
     m_pipe_handle = hPipe;
     m_connected = true;
     m_running = true;
@@ -198,8 +188,6 @@ bool PayloadIpcClient::send_status(const ipc::StatusPayload& payload) {
         ok = GetOverlappedResult(static_cast<HANDLE>(m_pipe_handle), &ov_write, &written, TRUE);
     }
     CloseHandle(ov_write.hEvent);
-    log_debug("PayloadIpcClient::send_status: WriteFile ok=" + std::to_string(ok) +
-              ", written=" + std::to_string(written) + "/" + std::to_string(buffer.size()));
     return (ok && written == buffer.size());
 }
 

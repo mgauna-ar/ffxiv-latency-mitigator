@@ -1,5 +1,5 @@
 #include "payload/game_hooks.hpp"
-#include "payload/payload_logger.hpp"
+
 #include "mitigator/game_structures.hpp"
 #include "mitigator/game_definitions.hpp"
 #include "mitigator/sigscan.hpp"
@@ -69,10 +69,6 @@ static void OnActionDispatched(uint32_t action_id, uint32_t seq, bool is_cast, f
     auto* mitigator = s_mitigator.load(std::memory_order_acquire);
     if (mitigator != nullptr) {
         mitigator->record_action_request(action_id, seq, std::chrono::steady_clock::now(), is_cast, cast_duration);
-        log_debug("UseActionLocation: accepted action=" + std::to_string(action_id) +
-                  " seq=" + std::to_string(seq) +
-                  " is_cast=" + (is_cast ? "true" : "false") +
-                  (is_cast ? (" cast_time=" + std::to_string(cast_duration)) : ""));
     }
 }
 
@@ -150,8 +146,6 @@ static uint8_t DetourUseActionLocationProtected(
         if (mitigator != nullptr) {
             if (is_cast) {
                 mitigator->record_cast_begin(action_id, cast_time);
-                log_debug("UseActionLocation: cast initiated action=" + std::to_string(action_id) +
-                          " cast_time=" + std::to_string(cast_time));
             } else {
                 // Instant action dispatched: clear any active cast in tracker
                 mitigator->record_cast_end();
@@ -219,12 +213,6 @@ static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float o
         mgr->animation_lock = new_lock_seconds;
     }
 
-    log_debug("ReceiveActionEffect: action=" + std::to_string(action_id) +
-              " seq=" + std::to_string(sequence) +
-              " old_lock=" + std::to_string(old_lock) +
-              " new_lock=" + std::to_string(new_lock) +
-              " adjusted=" + std::to_string(result.adjusted_lock_ms / constants::MS_PER_SECOND) +
-              " applied=" + (result.applied ? "true" : "false"));
 
     auto* ipc = s_ipc.load(std::memory_order_acquire);
     if (ipc != nullptr && ipc->is_connected()) {
@@ -351,11 +339,10 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         const auto sig_fallback = memory::Signature::parse(game::signatures::USE_ACTION_LOCATION_FALLBACK);
         addr_use_action = memory::scan_module_section(nullptr, sig_fallback);
     }
-    log_debug("HookManager: UseActionLocation sig addr=" + (addr_use_action ? std::to_string(addr_use_action) : "NOT FOUND"));
+
 
     if (addr_use_action != 0 && *reinterpret_cast<const uint8_t*>(addr_use_action) == 0xE8) {
         const uintptr_t target = memory::resolve_call_relative(addr_use_action);
-        log_debug("HookManager: UseActionLocation call-site resolved -> " + std::to_string(target));
         addr_use_action = target;
     }
 
@@ -365,7 +352,6 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
             reinterpret_cast<LPVOID>(&DetourUseActionLocation),
             reinterpret_cast<LPVOID*>(&fp_original_use_action_location)
         );
-        log_debug("HookManager: MH_CreateHook(UseActionLocation) result: " + std::to_string(status));
         if (status == MH_OK) {
             ++hooked;
         }
@@ -378,11 +364,10 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         const auto sig_fallback = memory::Signature::parse(game::signatures::RECEIVE_ACTION_EFFECT_FALLBACK);
         addr_recv_effect = memory::scan_module_section(nullptr, sig_fallback);
     }
-    log_debug("HookManager: ReceiveActionEffect sig addr=" + (addr_recv_effect ? std::to_string(addr_recv_effect) : "NOT FOUND"));
+
 
     if (addr_recv_effect != 0 && *reinterpret_cast<const uint8_t*>(addr_recv_effect) == 0xE8) {
         const uintptr_t target = memory::resolve_call_relative(addr_recv_effect);
-        log_debug("HookManager: ReceiveActionEffect call-site resolved -> " + std::to_string(target));
         addr_recv_effect = target;
     }
 
@@ -392,7 +377,6 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
             reinterpret_cast<LPVOID>(&DetourReceiveActionEffect),
             reinterpret_cast<LPVOID*>(&fp_original_receive_action_effect)
         );
-        log_debug("HookManager: MH_CreateHook(ReceiveActionEffect) result: " + std::to_string(status));
         if (status == MH_OK) {
             ++hooked;
         }
@@ -406,18 +390,16 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         const auto sig_action_mgr_fb = memory::Signature::parse(game::signatures::ACTION_MANAGER_INSTANCE_FALLBACK);
         addr_action_mgr_insn = memory::scan_module_section(nullptr, sig_action_mgr_fb);
     }
-    log_debug("HookManager: ActionManager sig addr=" + (addr_action_mgr_insn ? std::to_string(addr_action_mgr_insn) : "NOT FOUND"));
+
     if (addr_action_mgr_insn != 0) {
         const uintptr_t p_static_mgr = memory::resolve_rip_relative(
             addr_action_mgr_insn,
             game::definitions::ACTION_MGR_RIP_DISP_OFFSET,
             game::definitions::ACTION_MGR_RIP_INSN_LEN
         );
-        log_debug("HookManager: ActionManager RIP resolved=" + std::to_string(p_static_mgr));
         if (p_static_mgr != 0) {
             auto* mgr = reinterpret_cast<game::ActionManager*>(p_static_mgr);
             s_action_manager.store(mgr, std::memory_order_release);
-            log_debug("HookManager: ActionManager instance acquired: " + std::to_string(reinterpret_cast<uintptr_t>(mgr)));
         }
     }
 
@@ -429,7 +411,6 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
         m_hook_count = hooked;
         m_installed = true;
         m_last_error = "OK";
-        log_debug("HookManager: All primary hooks enabled successfully! Hooked count: " + std::to_string(hooked));
         return true;
     }
 
@@ -444,7 +425,6 @@ bool HookManager::install(AnimationLockMitigator* mitigator, PayloadIpcClient* i
     } else {
         m_last_error = "Hook installation failed";
     }
-    log_debug("HookManager: installation failed: " + std::string(m_last_error));
 
     MH_Uninitialize();
     s_mitigator.store(nullptr, std::memory_order_release);
