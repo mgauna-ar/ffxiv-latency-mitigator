@@ -20,7 +20,7 @@ In Final Fantasy XIV:
 
 ---
 
-## The Solution: In-Memory Detours with Adaptive Ping Smoothing
+## How It Works: In-Memory Detours with Adaptive Ping Smoothing
 
 This project implements an **In-Memory Detour Architecture** packaged inside a single standalone executable:
 
@@ -29,8 +29,8 @@ This project implements an **In-Memory Detour Architecture** packaged inside a s
   ├── 1. Discovers ffxiv_dx11.exe via Toolhelp32 snapshot
   ├── 2. Locates adjacent mitigator_payload.dll in the same directory
   ├── 3. Injects payload via Win32 VirtualAllocEx + CreateRemoteThread
-  ├── 4. Establishes Windows Named Pipe (\\\\.\\pipe\\ffxiv_mitigator_ipc)
-  └── 5. Displays Live Telemetry Dashboard & handles hotkeys [Q], [D], [L], [C]
+  ├── 4. Establishes Windows Named Pipe (\\.\pipe\ffxiv_mitigator_ipc)
+  └── 5. Displays Live Telemetry Dashboard & handles hotkeys [Q], [D], [L], [C], [S]
           │
           ▼ IPC Stream
 [ ffxiv_dx11.exe (Game Process) ]
@@ -55,68 +55,16 @@ When a server action effect arrives:
    $$L_{\text{adjusted}} = \max\Big(L_{\text{original}} - \Delta,\ L_{\text{floor}}\Big)$$
 5. **Anti-Cheat Guardrail**: $L_{\text{floor}}$ enforces a hard floor (default 25ms - 40ms) to prevent setting animation lock to 0ms or negative values, protecting against server-side frequency anomaly detection.
 
-## Architecture & Development
-
-For technical details on codebase structure, single-responsibility file boundaries, game memory offsets, and developer/agent guidelines, see [AGENTS.md](AGENTS.md).
-
----
-
-## Building
-
-### Requirements
-- **Windows 10 / 11 (64-bit)**
-- **Visual Studio 2022** (with C++20 MSVC v143 toolset)
-- **CMake 3.20+**
-
-### Build Commands
-
-```cmd
-:: 1. Generate build files for Visual Studio 2022 x64
-cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
-
-:: 2. Compile standalone executable and payload
-cmake --build build --config Release
-
-:: 3. Run unit tests
-ctest --test-dir build -C Release --output-on-failure
-```
-
-The resulting binaries will be located side-by-side at:
-```
-build\bin\Release\ffxiv-mitigator.exe
-build\bin\Release\mitigator_payload.dll
-```
-
-### Cross-Platform Unit Tests (macOS / Linux / Windows)
-
-The core mitigation math, RTT smoothing, sequence tracker, and IPC protocols are completely platform-independent C++20 and can be built and tested directly on macOS or Linux:
-
-```bash
-clang++ -std=c++20 -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
-  src/core/rolling_rtt.cpp \
-  src/core/sequence_tracker.cpp \
-  src/core/cast_tracker.cpp \
-  src/core/animation_lock.cpp \
-  src/core/ipc_protocol.cpp \
-  src/core/sigscan.cpp \
-  tests/test_rolling_rtt.cpp \
-  tests/test_sequence_tracker.cpp \
-  tests/test_cast_tracker.cpp \
-  tests/test_animation_lock.cpp \
-  tests/test_ipc_protocol.cpp \
-  tests/test_sigscan.cpp \
-  tests/test_main.cpp \
-  -o unit_tests && ./unit_tests
-```
-
 ---
 
 ## Usage
 
 ### Quick Start
-1. Start Final Fantasy XIV (`ffxiv_dx11.exe`).
-2. Ensure `ffxiv-mitigator.exe` and `mitigator_payload.dll` are in the same folder, and run `ffxiv-mitigator.exe` as Administrator (required for Win32 process injection permissions).
-3. The console will detect the game, inject the adjacent payload DLL, hook the detours, and begin streaming live telemetry.
+1. **Download the latest release binaries** (`ffxiv-mitigator.exe` and `mitigator_payload.dll`) from the GitHub Releases tab, or [build from source](#building-from-source).
+2. Ensure `ffxiv-mitigator.exe` and `mitigator_payload.dll` are placed in the **same directory**.
+3. Launch Final Fantasy XIV (`ffxiv_dx11.exe`).
+4. Run `ffxiv-mitigator.exe` as **Administrator** (required for Win32 process injection permissions).
+5. The console will detect the game, inject the adjacent payload DLL, hook the detours, and begin streaming live telemetry.
 
 ### CLI Options
 
@@ -143,14 +91,47 @@ Options:
 
 ---
 
-## 🔄 Updating for Game Patches
+## Building from Source
 
-When a new Final Fantasy XIV patch releases, updating the tool requires changing only **one single file**: [`include/mitigator/game_definitions.hpp`](include/mitigator/game_definitions.hpp).
+### Requirements
+- **Windows 10 / 11 (64-bit)**
+- **Visual Studio 2022** (with C++20 MSVC v143 toolset)
+- **CMake 3.20+**
 
-1. All AOB pattern signatures (`USE_ACTION_LOCATION_PRIMARY`, `RECEIVE_ACTION_EFFECT_PRIMARY`, etc.) are defined as `constexpr std::string_view` in `mitigator::game::signatures`.
-2. All memory offsets (`ACTION_MANAGER_ANIMATION_LOCK`, `ACTION_MANAGER_IS_CASTING`, etc.) are defined in `mitigator::game::offsets`.
-3. Memory layout assertions are checked at compile-time via `static_assert(offsetof(...))` in [`include/mitigator/game_structures.hpp`](include/mitigator/game_structures.hpp), ensuring accidental mismatches or typos fail before compiling an executable.
-4. Run `make test` or `cmake --build build --config Release` to produce an updated `ffxiv-mitigator.exe`.
+### Build Commands
+
+```cmd
+:: 1. Generate build files for Visual Studio 2022 x64
+cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+
+:: 2. Compile standalone executable and payload
+cmake --build build --config Release
+
+:: 3. Run unit tests
+ctest --test-dir build -C Release --output-on-failure
+```
+
+The resulting binaries will be located side-by-side at:
+```
+build\bin\Release\ffxiv-mitigator.exe
+build\bin\Release\mitigator_payload.dll
+```
+
+### Testing Core Logic (macOS / Linux / Windows)
+
+The core simulation math, rolling RTT tracker, sequence tracker, and IPC serialization protocols are 100% platform-independent C++20 and can be built and tested directly on any operating system:
+
+```bash
+make test
+```
+
+See [AGENTS.md](AGENTS.md) for direct compiler invocation commands and cross-platform verification details.
+
+---
+
+## Architecture & Development
+
+For technical details on codebase structure, single-responsibility file boundaries, game memory offsets, and patch day update workflows, see [AGENTS.md](AGENTS.md).
 
 ---
 
