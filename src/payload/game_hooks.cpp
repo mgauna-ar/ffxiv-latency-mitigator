@@ -259,6 +259,27 @@ void FFXIV_FASTCALL DetourReceiveActionEffect(
     );
 }
 
+static void OnCastBegin(game::ActionManager* self, uint32_t action_id, float cast_time) {
+    auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+    if (mitigator != nullptr) {
+        float effective_cast_time = cast_time;
+        if (self != nullptr && self->cast_time > 0.0f) {
+            effective_cast_time = self->cast_time;
+        }
+        mitigator->record_cast_begin(action_id, effective_cast_time);
+        log_debug("CastBegin: action=" + std::to_string(action_id) +
+                  " cast_time=" + std::to_string(effective_cast_time));
+    }
+}
+
+static void OnCastInterrupt() {
+    auto* mitigator = s_mitigator.load(std::memory_order_acquire);
+    if (mitigator != nullptr) {
+        mitigator->record_cast_interrupt();
+        log_debug("CastInterrupt: active cast aborted");
+    }
+}
+
 static uint8_t DetourCastBeginProtected(
     game::ActionManager* self,
     uint32_t action_type,
@@ -282,17 +303,7 @@ static uint8_t DetourCastBeginProtected(
         return 0;
     }
 
-    auto* mitigator = s_mitigator.load(std::memory_order_acquire);
-    if (mitigator != nullptr) {
-        float effective_cast_time = cast_time;
-        if (self != nullptr && self->cast_time > 0.0f) {
-            effective_cast_time = self->cast_time;
-        }
-        mitigator->record_cast_begin(action_id, effective_cast_time);
-        log_debug("CastBegin: action=" + std::to_string(action_id) +
-                  " cast_time=" + std::to_string(effective_cast_time));
-    }
-
+    OnCastBegin(self, action_id, cast_time);
     return ret;
 }
 
@@ -321,11 +332,7 @@ static void DetourCastInterruptProtected(game::ActionManager* self) {
         return;
     }
 
-    auto* mitigator = s_mitigator.load(std::memory_order_acquire);
-    if (mitigator != nullptr) {
-        mitigator->record_cast_interrupt();
-        log_debug("CastInterrupt: active cast aborted");
-    }
+    OnCastInterrupt();
 }
 
 void FFXIV_FASTCALL DetourCastInterrupt(game::ActionManager* self) {

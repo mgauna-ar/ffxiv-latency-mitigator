@@ -351,7 +351,6 @@ int main(int argc, char* argv[]) {
     std::this_thread::sleep_for(UNHOOK_DRAIN_DELAY);
 
     ipc_server.stop();
-    injector.cleanup();
 
     if (proc->handle) {
         CloseHandle(static_cast<HANDLE>(proc->handle));
