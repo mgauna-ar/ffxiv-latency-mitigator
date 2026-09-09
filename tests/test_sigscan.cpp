@@ -75,29 +75,11 @@ TEST_CASE(SigScan, GameDefinitionsSignaturesParseSuccessfully) {
     const auto sig_use_fallback = mitigator::memory::Signature::parse(signatures::USE_ACTION_LOCATION_FALLBACK);
     TEST_ASSERT(!sig_use_fallback.empty());
 
-    const auto sig_use_legacy = mitigator::memory::Signature::parse(signatures::USE_ACTION_LOCATION_LEGACY);
-    TEST_ASSERT(!sig_use_legacy.empty());
-
     const auto sig_recv_primary = mitigator::memory::Signature::parse(signatures::RECEIVE_ACTION_EFFECT_PRIMARY);
     TEST_ASSERT(!sig_recv_primary.empty());
 
     const auto sig_recv_fallback = mitigator::memory::Signature::parse(signatures::RECEIVE_ACTION_EFFECT_FALLBACK);
     TEST_ASSERT(!sig_recv_fallback.empty());
-
-    const auto sig_recv_legacy = mitigator::memory::Signature::parse(signatures::RECEIVE_ACTION_EFFECT_LEGACY);
-    TEST_ASSERT(!sig_recv_legacy.empty());
-
-    const auto sig_cast_begin = mitigator::memory::Signature::parse(signatures::CAST_BEGIN_PRIMARY);
-    TEST_ASSERT(!sig_cast_begin.empty());
-
-    const auto sig_cast_begin_fb = mitigator::memory::Signature::parse(signatures::CAST_BEGIN_FALLBACK);
-    TEST_ASSERT(!sig_cast_begin_fb.empty());
-
-    const auto sig_cast_interrupt = mitigator::memory::Signature::parse(signatures::CAST_INTERRUPT_PRIMARY);
-    TEST_ASSERT(!sig_cast_interrupt.empty());
-
-    const auto sig_cast_interrupt_fb = mitigator::memory::Signature::parse(signatures::CAST_INTERRUPT_FALLBACK);
-    TEST_ASSERT(!sig_cast_interrupt_fb.empty());
 
     const auto sig_action_mgr = mitigator::memory::Signature::parse(signatures::ACTION_MANAGER_INSTANCE_PRIMARY);
     TEST_ASSERT(!sig_action_mgr.empty());
@@ -105,11 +87,8 @@ TEST_CASE(SigScan, GameDefinitionsSignaturesParseSuccessfully) {
     const auto sig_action_mgr_fb = mitigator::memory::Signature::parse(signatures::ACTION_MANAGER_INSTANCE_FALLBACK);
     TEST_ASSERT(!sig_action_mgr_fb.empty());
 
-    const auto sig_action_mgr_leg = mitigator::memory::Signature::parse(signatures::ACTION_MANAGER_INSTANCE_LEGACY);
-    TEST_ASSERT(!sig_action_mgr_leg.empty());
-
     // Compile-time validation of definitions invariants
-    static_assert(definitions::TOTAL_AVAILABLE_HOOKS == 4);
-    static_assert(definitions::MIN_REQUIRED_PRIMARY_HOOKS == 4);
+    static_assert(definitions::TOTAL_AVAILABLE_HOOKS == 2);
+    static_assert(definitions::MIN_REQUIRED_PRIMARY_HOOKS == 2);
     static_assert(definitions::MIN_ACTION_EFFECT_LOCK_SECONDS > 0.0f);
 }

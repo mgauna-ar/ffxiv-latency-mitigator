@@ -37,9 +37,8 @@ This project implements an **In-Memory Detour Architecture** packaged inside a s
   └── [ mitigator_payload.dll (In-Game Detour Engine) ]
         ├── AOB Signature Scanner (dynamically locates game routines)
         ├── MinHook Detours:
-        │     ├── UseActionLocation (captures ActionManager* and records timestamps)
-        │     ├── ReceiveActionEffect (calculates elapsed RTT, rewrites animationLock)
-        │     ├── CastBegin & CastInterrupt (preserves hard-cast timings)
+        │     ├── UseActionLocation (captures ActionManager*, tracks action dispatch & cast initiation)
+        │     ├── ReceiveActionEffect (calculates elapsed RTT, preserves cast locks, rewrites animationLock)
         │     └── ActionManager->animation_lock adjustment
         └── Adaptive Latency Math (simulates ~10-20ms ping with anti-cheat safety floors)
 ```

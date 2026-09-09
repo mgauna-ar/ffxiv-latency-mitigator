@@ -12,10 +12,8 @@ namespace mitigator::payload {
  * @brief Manages MinHook detours in the FFXIV client process.
  *
  * Hooks:
- * 1. UseActionLocation (Client action dispatch)
+ * 1. UseActionLocation (Client action dispatch & cast initiation)
  * 2. ReceiveActionEffect (Server action response & animation lock assignment)
- * 3. CastBegin (Spell cast start)
- * 4. CastInterrupt (Spell cast abort)
  */
 class HookManager {
 public:

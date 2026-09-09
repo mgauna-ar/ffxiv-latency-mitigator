@@ -41,7 +41,7 @@ This document outlines the architectural patterns, engineering principles, memor
 | **Animation Lock** | `include/mitigator/animation_lock.hpp`<br>`src/core/animation_lock.cpp` | Core mitigation formula, anti-cheat safety floors, ceiling clamping, dry-run mode |
 | **IPC Protocol** | `include/mitigator/ipc_protocol.hpp`<br>`src/core/ipc_protocol.cpp` | Fixed-size binary packet framing, serialization, and deserialization |
 | **Signature Scanner** | `include/mitigator/sigscan.hpp`<br>`src/core/sigscan.cpp` | IDA-style AOB pattern scanning, PE section matching, and RIP-relative address resolution |
-| **Game Hooks** | `src/payload/game_hooks.hpp`<br>`src/payload/game_hooks.cpp` | MinHook detours for `UseActionLocation`, `ReceiveActionEffect`, `CastBegin`, `CastInterrupt` |
+| **Game Hooks** | `src/payload/game_hooks.hpp`<br>`src/payload/game_hooks.cpp` | MinHook detours for `UseActionLocation` (action dispatch & cast tracking) and `ReceiveActionEffect` (effect mitigation) |
 | **Payload IPC Client** | `src/payload/payload_ipc.hpp`<br>`src/payload/payload_ipc.cpp` | In-game Named Pipe client thread streaming telemetry to the loader |
 | **Payload Entry** | `src/payload/dllmain.cpp` | Injected DLL lifecycle, background orchestration, and clean unhooking (`FreeLibraryAndExitThread`) |
 | **Process Finder** | `src/loader/process_finder.hpp`<br>`src/loader/process_finder.cpp` | Win32 Toolhelp32 process snapshot scanning and 64-bit architecture validation |
@@ -124,9 +124,7 @@ When Square Enix publishes an update to Final Fantasy XIV (`ffxiv_dx11.exe`), ex
 2. **Locate Target Functions**:
    - `UseActionLocation`: Find string references to action error codes or search by opcode sequence.
    - `ReceiveActionEffect`: Search for the packet processing loop handling action effect headers.
-   - `CastBegin`: Search for writes to `ActionManager + 0x28` (`is_casting = true`).
-   - `CastInterrupt`: Search for resets of `ActionManager + 0x28` (`is_casting = false`).
-   - `ActionManager Instance`: Search for the static pointer resolution instruction (`MOV rcx, [rip + disp32]`).
+   - `ActionManager Instance`: Search for the static pointer resolution instruction (`LEA rcx, [rip + disp32]`).
 3. **Update [`include/mitigator/game_definitions.hpp`](include/mitigator/game_definitions.hpp)**:
    - If signatures changed, update `game::signatures::...`.
    - If struct offsets shifted, update `game::offsets::...`.
