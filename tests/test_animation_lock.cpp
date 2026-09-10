@@ -1,5 +1,8 @@
 #include "test_framework.hpp"
 #include "mitigator/animation_lock.hpp"
+#include <thread>
+#include <atomic>
+#include <vector>
 
 TEST_CASE(AnimationLock, StandardPingMitigation) {
     mitigator::MitigationConfig cfg{};
@@ -401,4 +404,71 @@ TEST_CASE(AnimationLock, ColdStartSpikeRejectionPreventsFloorClamp) {
     TEST_ASSERT(!res6.cold_start_guard);
     TEST_ASSERT(res6.spike_filtered);
 }
+
+TEST_CASE(AnimationLock, ConcurrentAccessStressTest) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.min_animation_lock_ms = 25.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    constexpr int NUM_ACTIONS = 200;
+    std::atomic<bool> start_flag{false};
+    std::atomic<int> completed_mitigations{0};
+
+    // Thread 1: Dispatches action requests
+    std::thread t_dispatch([&]() {
+        while (!start_flag.load()) { std::this_thread::yield(); }
+        for (int i = 1; i <= NUM_ACTIONS; ++i) {
+            engine.record_action_request(0x3000 + (i % 10), i, t0 + std::chrono::milliseconds(i * 5));
+        }
+    });
+
+    // Thread 2: Processes incoming action effects
+    std::thread t_effects([&]() {
+        while (!start_flag.load()) { std::this_thread::yield(); }
+        for (int i = 1; i <= NUM_ACTIONS; ++i) {
+            const auto res = engine.calculate_mitigation(
+                0x3000 + (i % 10),
+                i,
+                600.0,
+                t0 + std::chrono::milliseconds(i * 5 + 60)
+            );
+            if (res.applied) {
+                completed_mitigations.fetch_add(1);
+            }
+        }
+    });
+
+    // Thread 3: Dynamic config changes during live mitigation
+    std::thread t_config([&]() {
+        while (!start_flag.load()) { std::this_thread::yield(); }
+        for (int i = 0; i < 50; ++i) {
+            engine.set_target_ping_ms(10.0 + (i % 15));
+            engine.set_dry_run((i % 2) == 0);
+            (void)engine.get_config();
+        }
+    });
+
+    // Thread 4: Telemetry reader thread
+    std::thread t_reader([&]() {
+        while (!start_flag.load()) { std::this_thread::yield(); }
+        for (int i = 0; i < 50; ++i) {
+            const auto stats = engine.get_session_stats();
+            (void)stats;
+        }
+    });
+
+    start_flag.store(true);
+    t_dispatch.join();
+    t_effects.join();
+    t_config.join();
+    t_reader.join();
+
+    // Verify system remained stable, no deadlocks, and recorded requests
+    const auto final_stats = engine.get_session_stats();
+    TEST_ASSERT_EQ(final_stats.total_actions_requested, NUM_ACTIONS);
+}
+
 

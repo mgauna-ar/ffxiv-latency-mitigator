@@ -18,8 +18,10 @@ void AnimationLockMitigator::record_action_request(
     bool is_cast,
     float cast_duration_seconds
 ) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    ++m_total_actions_requested;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        ++m_total_actions_requested;
+    }
     m_seq_tracker.record_request(action_id, sequence, timestamp, is_cast, cast_duration_seconds);
 }
 
@@ -29,14 +31,19 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
     double original_lock_ms,
     TimePoint now
 ) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    // Acquire mutex briefly only to take a local snapshot of configuration
+    MitigationConfig config;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        config = m_config;
+    }
 
     MitigationResult res{};
     res.action_id = action_id;
     res.sequence = sequence;
     res.original_lock_ms = original_lock_ms;
 
-    // 1. Try to correlate with recorded outgoing action request
+    // 1. Try to correlate with recorded outgoing action request (internally synchronized)
     const double expected_rtt = (m_rtt_tracker.sample_count() > 0)
         ? m_rtt_tracker.get_smoothed_rtt_ms()
         : 0.0;
@@ -102,7 +109,7 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
                 res.spike_filtered = true;
             }
         } else if (is_cold_start && samples_before > 0) {
-            // Cold-start protection: prior to having 3 samples for median filtering,
+            // Cold-start protection: prior to having 5 samples for median filtering,
             // guard against initial handshake jitter, hitching, or opening burst packet delays
             const double cold_start_cap = baseline_rtt + std::max(
                 constants::MIN_OUTLIER_TOLERANCE_MS,
@@ -125,7 +132,7 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
 
     // 2. Compute latency delta to mitigate: Delta = RTT - TargetPing - SafetyMargin
     // Safety margin provides a conservative buffer to prevent over-reducing
-    double latency_delta = (effective_rtt - m_config.target_ping_ms) - m_config.safety_margin_ms;
+    double latency_delta = (effective_rtt - config.target_ping_ms) - config.safety_margin_ms;
     if (latency_delta < 0.0) {
         latency_delta = 0.0; // Already faster than target ping, no need to reduce
     }
@@ -134,19 +141,18 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
     double target_lock = original_lock_ms - latency_delta;
 
     // 4. Apply safety floors and ceilings (Anti-cheat & server anomaly protection)
-    if (target_lock < m_config.min_animation_lock_ms) {
-        target_lock = m_config.min_animation_lock_ms;
+    if (target_lock < config.min_animation_lock_ms) {
+        target_lock = config.min_animation_lock_ms;
         res.clamped_by_floor = true;
-        ++m_total_floor_clamps;
     }
 
-    if (target_lock > m_config.max_animation_lock_ms) {
-        target_lock = m_config.max_animation_lock_ms;
+    if (target_lock > config.max_animation_lock_ms) {
+        target_lock = config.max_animation_lock_ms;
         res.clamped_by_ceiling = true;
     }
 
     // Never increase original lock beyond server's intent unless original was below min floor
-    if (target_lock > original_lock_ms && original_lock_ms >= m_config.min_animation_lock_ms) {
+    if (target_lock > original_lock_ms && original_lock_ms >= config.min_animation_lock_ms) {
         target_lock = original_lock_ms;
     }
 
@@ -154,16 +160,22 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
     res.delay_reduced_ms = std::max(0.0, original_lock_ms - res.adjusted_lock_ms);
 
     // 5. Check dry-run mode
-    if (m_config.dry_run) {
+    if (config.dry_run) {
         res.applied = false;
     } else {
         res.applied = (res.delay_reduced_ms > 0.0);
     }
 
-    // 6. Update session telemetry (only if mitigation was actually applied to game memory)
-    if (res.applied) {
-        ++m_total_actions_mitigated;
-        m_cumulative_time_saved_ms += res.delay_reduced_ms;
+    // 6. Update session telemetry (only if mitigation was applied or clamped)
+    if (res.clamped_by_floor || res.applied) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (res.clamped_by_floor) {
+            ++m_total_floor_clamps;
+        }
+        if (res.applied) {
+            ++m_total_actions_mitigated;
+            m_cumulative_time_saved_ms += res.delay_reduced_ms;
+        }
     }
 
     return res;
