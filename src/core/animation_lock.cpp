@@ -180,6 +180,11 @@ void AnimationLockMitigator::record_cast_end(TimePoint now) {
     m_cast_tracker.on_cast_end(now);
 }
 
+bool AnimationLockMitigator::is_casting(TimePoint now) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_cast_tracker.is_casting(now, m_rtt_tracker.get_smoothed_rtt_ms());
+}
+
 MitigationConfig AnimationLockMitigator::get_config() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_config;

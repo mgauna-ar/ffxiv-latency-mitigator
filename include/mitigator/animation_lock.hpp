@@ -52,6 +52,9 @@ public:
     /// Records completion of an active cast.
     void record_cast_end(TimePoint now = std::chrono::steady_clock::now());
 
+    /// Returns whether the player is currently considered casting.
+    [[nodiscard]] bool is_casting(TimePoint now = std::chrono::steady_clock::now()) const;
+
     /// Returns current configuration copy.
     [[nodiscard]] MitigationConfig get_config() const;
 
