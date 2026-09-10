@@ -273,19 +273,51 @@ TEST_CASE(AnimationLock, CastGraceWindowProtectsLateServerAck) {
 TEST_CASE(AnimationLock, MaxAnimationLockCeilingClamping) {
     mitigator::MitigationConfig cfg{};
     cfg.target_ping_ms = 15.0;
-    cfg.max_animation_lock_ms = 2000.0; // 2.0s ceiling
+    cfg.max_animation_lock_ms = 2500.0; // 2.5s ceiling
 
     mitigator::AnimationLockMitigator engine(cfg);
     const auto t0 = std::chrono::steady_clock::now();
 
-    // High incoming animation lock (e.g. limit break: 3000ms) with small 35ms RTT
+    // 1. High incoming animation lock (Limit Break 3: 8000ms) with small 40ms RTT
     engine.record_action_request(0x0ABC, 60, t0);
-    const auto t_recv = t0 + std::chrono::milliseconds(35);
-    const auto res = engine.calculate_mitigation(0x0ABC, 60, 3000.0, t_recv);
+    const auto t_recv = t0 + std::chrono::milliseconds(40);
+    const auto res = engine.calculate_mitigation(0x0ABC, 60, 8000.0, t_recv);
 
-    // Target lock = 3000 - (35 - 15) = 2980ms -> clamped to max ceiling 2000ms
+    // Target lock = 8000 - (40 - 15) = 7975ms
+    // Relative latency invariant: Extended locks (LB 3.8s-8.0s, potions 1.2s) must NOT be truncated to 2500ms
+    TEST_ASSERT(!res.clamped_by_ceiling);
+    TEST_ASSERT_NEAR(res.delay_reduced_ms, 25.0, 0.001);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 7975.0, 0.001);
+    TEST_ASSERT(res.applied);
+
+    // 2. Limit Break 1/2 (3800ms lock)
+    const auto t1 = t0 + std::chrono::milliseconds(1000);
+    engine.record_action_request(0x0ABD, 61, t1);
+    const auto res_lb1 = engine.calculate_mitigation(0x0ABD, 61, 3800.0, t1 + std::chrono::milliseconds(40));
+    TEST_ASSERT(!res_lb1.clamped_by_ceiling);
+    TEST_ASSERT_NEAR(res_lb1.delay_reduced_ms, 25.0, 0.001);
+    TEST_ASSERT_NEAR(res_lb1.adjusted_lock_ms, 3775.0, 0.001);
+    TEST_ASSERT(res_lb1.applied);
+}
+
+TEST_CASE(AnimationLock, StandardActionRunawayCeilingClamping) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.max_animation_lock_ms = 1000.0;
+    cfg.min_animation_lock_ms = 1200.0; // Floor configured higher than ceiling forces runaway target_lock
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Standard action (original_lock_ms <= max_animation_lock_ms)
+    engine.record_action_request(0x0ABD, 61, t0);
+    const auto t_recv = t0 + std::chrono::milliseconds(40);
+    const auto res = engine.calculate_mitigation(0x0ABD, 61, 800.0, t_recv);
+
+    // Floor clamp pushed target_lock to 1200ms (> 1000ms max).
+    // Because original_lock_ms (800ms) <= max_animation_lock_ms (1000ms), ceiling clamp must trigger.
     TEST_ASSERT(res.clamped_by_ceiling);
-    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 2000.0, 0.001);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 1000.0, 0.001);
 }
 
 TEST_CASE(AnimationLock, ConservativeSafetyMargin) {
@@ -489,4 +521,219 @@ TEST_CASE(AnimationLock, InitialActionQueueDelayProtectedByColdStartGuard) {
     TEST_ASSERT_NEAR(res.adjusted_lock_ms, 415.0, 2.0); // 600 - (200 - 15) = 415ms
     TEST_ASSERT_EQ(engine.get_session_stats().total_floor_clamps, 0);
 }
+
+TEST_CASE(AnimationLock, QueuedActionAppliesBaselineWithoutPoisoningRtt) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.min_animation_lock_ms = 25.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Prime the tracker with stable 40ms samples so baseline RTT is firmly established
+    for (int i = 1; i <= 5; ++i) {
+        engine.record_action_request(0x2000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x2000 + i, i, 600.0, t0 + std::chrono::milliseconds(40));
+    }
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_smoothed_rtt_ms(), 40.0, 1.0);
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_median_rtt_ms(), 40.0, 1.0);
+    const size_t samples_before = engine.rtt_tracker().sample_count();
+
+    // Dispatch a queued action (held in client buffer, 400ms dwell time before server response)
+    const auto t_queued = t0 + std::chrono::milliseconds(500);
+    engine.record_action_request(0x3001, 50, t_queued, false, 0.0f, true /* is_queued */);
+
+    // Server responds 400ms after client queue submission
+    const auto t_recv = t_queued + std::chrono::milliseconds(400);
+    const auto res = engine.calculate_mitigation(0x3001, 50, 600.0, t_recv);
+
+    // Queued action must use smoothed baseline RTT (40ms) rather than 400ms queue elapsed time
+    // Latency delta: 40ms - 15ms = 25ms reduction -> adjusted lock 575ms
+    TEST_ASSERT(res.queued_action);
+    TEST_ASSERT(res.applied);
+    TEST_ASSERT_NEAR(res.measured_rtt_ms, 400.0, 0.5);
+    TEST_ASSERT_NEAR(res.delay_reduced_ms, 25.0, 1.0);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 575.0, 1.0);
+
+    // Tracker must NOT be poisoned by the 400ms queue dwell time
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_smoothed_rtt_ms(), 40.0, 1.0);
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_median_rtt_ms(), 40.0, 1.0);
+    TEST_ASSERT_EQ(engine.rtt_tracker().sample_count(), samples_before);
+    TEST_ASSERT(!res.spike_filtered);
+    TEST_ASSERT(!res.route_shift_reseeded);
+}
+
+TEST_CASE(AnimationLock, SustainedRouteShiftReseedsOutlierWindow) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Prime tracker with stable 40ms baseline (5 samples)
+    for (int i = 1; i <= 5; ++i) {
+        engine.record_action_request(0x4000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x4000 + i, i, 600.0, t0 + std::chrono::milliseconds(40));
+    }
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_median_rtt_ms(), 40.0, 1.0);
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 0);
+
+    // 2. Ingest 3 outlier samples (120ms ping vs 40ms median + 50ms tolerance = 90ms threshold)
+    // Verify spike filtering remains active for transient spikes (< 4)
+    for (int i = 1; i <= 3; ++i) {
+        const auto t_req = t0 + std::chrono::milliseconds(i * 1000);
+        engine.record_action_request(0x5000 + i, 10 + i, t_req);
+        const auto res = engine.calculate_mitigation(0x5000 + i, 10 + i, 600.0, t_req + std::chrono::milliseconds(120));
+
+        TEST_ASSERT(res.spike_filtered);
+        TEST_ASSERT(!res.route_shift_reseeded);
+        // Mitigated using clamped median RTT (40ms - 15ms = 25ms)
+        TEST_ASSERT_NEAR(res.delay_reduced_ms, 25.0, 2.0);
+        TEST_ASSERT_EQ(engine.consecutive_outliers(), static_cast<size_t>(i));
+    }
+
+    // 3. Ingest 4th outlier sample -> reaches CONSECUTIVE_OUTLIER_RESEED_THRESHOLD (4)
+    const auto t_shift = t0 + std::chrono::milliseconds(4000);
+    engine.record_action_request(0x5004, 14, t_shift);
+    const auto res4 = engine.calculate_mitigation(0x5004, 14, 600.0, t_shift + std::chrono::milliseconds(120));
+
+    // Window must reseed to new route baseline (120ms)
+    TEST_ASSERT(res4.route_shift_reseeded);
+    TEST_ASSERT(!res4.spike_filtered);
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 0);
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_median_rtt_ms(), 120.0, 1.0);
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_smoothed_rtt_ms(), 120.0, 1.0);
+
+    // Reseeded action applies reduction according to new 120ms baseline (120 - 15 = 105ms)
+    TEST_ASSERT_NEAR(res4.delay_reduced_ms, 105.0, 2.0);
+    TEST_ASSERT_NEAR(res4.adjusted_lock_ms, 495.0, 2.0);
+
+    // 4. Subsequent sample at 120ms adapts cleanly from new baseline
+    const auto t_subsequent = t0 + std::chrono::milliseconds(5000);
+    engine.record_action_request(0x5005, 15, t_subsequent);
+    const auto res5 = engine.calculate_mitigation(0x5005, 15, 600.0, t_subsequent + std::chrono::milliseconds(120));
+
+    TEST_ASSERT(!res5.route_shift_reseeded);
+    TEST_ASSERT(!res5.spike_filtered);
+    TEST_ASSERT_NEAR(res5.adjusted_lock_ms, 495.0, 2.0);
+}
+
+TEST_CASE(AnimationLock, TransientSpikesResetConsecutiveOutlierCounter) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Prime tracker with 5 stable 40ms samples
+    for (int i = 1; i <= 5; ++i) {
+        engine.record_action_request(0x6000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x6000 + i, i, 600.0, t0 + std::chrono::milliseconds(40));
+    }
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 0);
+
+    // 2. Ingest 2 transient spikes
+    for (int i = 1; i <= 2; ++i) {
+        const auto t_spike = t0 + std::chrono::milliseconds(i * 1000);
+        engine.record_action_request(0x6010 + i, 10 + i, t_spike);
+        const auto res = engine.calculate_mitigation(0x6010 + i, 10 + i, 600.0, t_spike + std::chrono::milliseconds(120));
+        TEST_ASSERT(res.spike_filtered);
+        TEST_ASSERT_EQ(engine.consecutive_outliers(), static_cast<size_t>(i));
+    }
+
+    // 3. Normal 40ms sample arrives -> consecutive outliers must reset to 0
+    const auto t_normal = t0 + std::chrono::milliseconds(3000);
+    engine.record_action_request(0x6020, 20, t_normal);
+    const auto res_normal = engine.calculate_mitigation(0x6020, 20, 600.0, t_normal + std::chrono::milliseconds(40));
+    TEST_ASSERT(!res_normal.spike_filtered);
+    TEST_ASSERT(!res_normal.route_shift_reseeded);
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 0);
+
+    // 4. One more spike occurs -> counter starts over at 1 (not 3)
+    const auto t_spike3 = t0 + std::chrono::milliseconds(4000);
+    engine.record_action_request(0x6021, 21, t_spike3);
+    const auto res_spike3 = engine.calculate_mitigation(0x6021, 21, 600.0, t_spike3 + std::chrono::milliseconds(120));
+    TEST_ASSERT(res_spike3.spike_filtered);
+    TEST_ASSERT(!res_spike3.route_shift_reseeded);
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 1);
+
+    // 5. Engine reset clears consecutive outliers counter
+    engine.reset();
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 0);
+}
+
+TEST_CASE(AnimationLock, HighPingRouteShiftAdaptsWithoutFalseColdStartClamping) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Prime tracker with stable 40ms baseline (5 samples)
+    for (int i = 1; i <= 5; ++i) {
+        engine.record_action_request(0x7000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x7000 + i, i, 600.0, t0 + std::chrono::milliseconds(40));
+    }
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_median_rtt_ms(), 40.0, 1.0);
+
+    // 2. Route shifts to high ping (250ms, e.g. international cross-region)
+    // First 3 samples are spike filtered
+    for (int i = 1; i <= 3; ++i) {
+        const auto t_req = t0 + std::chrono::milliseconds(i * 1000);
+        engine.record_action_request(0x7010 + i, 10 + i, t_req);
+        const auto res = engine.calculate_mitigation(0x7010 + i, 10 + i, 600.0, t_req + std::chrono::milliseconds(250));
+        TEST_ASSERT(res.spike_filtered);
+        TEST_ASSERT(!res.route_shift_reseeded);
+        TEST_ASSERT_EQ(engine.consecutive_outliers(), static_cast<size_t>(i));
+    }
+
+    // 3. 4th sample triggers route reseed to 250ms
+    const auto t_shift = t0 + std::chrono::milliseconds(4000);
+    engine.record_action_request(0x7014, 14, t_shift);
+    const auto res4 = engine.calculate_mitigation(0x7014, 14, 600.0, t_shift + std::chrono::milliseconds(250));
+
+    TEST_ASSERT(res4.route_shift_reseeded);
+    TEST_ASSERT(!res4.spike_filtered);
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 0);
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_smoothed_rtt_ms(), 250.0, 1.0);
+
+    // 4. Crucial verification: 5th sample arrives at 250ms (samples_before == 0 due to reset).
+    // It MUST NOT be falsely clamped by cold_start_guard to 200ms!
+    const auto t_subsequent = t0 + std::chrono::milliseconds(5000);
+    engine.record_action_request(0x7015, 15, t_subsequent);
+    const auto res5 = engine.calculate_mitigation(0x7015, 15, 600.0, t_subsequent + std::chrono::milliseconds(250));
+
+    TEST_ASSERT(!res5.route_shift_reseeded);
+    TEST_ASSERT(!res5.spike_filtered);
+    TEST_ASSERT(!res5.cold_start_guard); // Must NOT be flagged as cold start outlier!
+    // Expected reduction: 250ms - 15ms = 235ms -> adjusted lock: 600ms - 235ms = 365ms
+    TEST_ASSERT_NEAR(res5.delay_reduced_ms, 235.0, 2.0);
+    TEST_ASSERT_NEAR(res5.adjusted_lock_ms, 365.0, 2.0);
+}
+
+TEST_CASE(AnimationLock, QueuedCastPreservesLockAndReportsQueuedTelemetry) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Begin cast for a 2.5s spell (e.g. Fire IV)
+    engine.record_cast_begin(0x0E05, 2.5f, t0);
+
+    // Record queued cast request (buffered during GCD)
+    engine.record_action_request(0x0E05, 80, t0, true /* is_cast */, 2.5f, true /* is_queued */);
+
+    // Server effect arrives
+    const auto t_recv = t0 + std::chrono::milliseconds(100);
+    const auto res = engine.calculate_mitigation(0x0E05, 80, 100.0, t_recv);
+
+    // Cast lock must be preserved, and queued_action flag must be accurately reported
+    TEST_ASSERT(res.cast_active);
+    TEST_ASSERT(res.queued_action);
+    TEST_ASSERT(!res.applied);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 100.0, 0.001);
+}
+
+
 

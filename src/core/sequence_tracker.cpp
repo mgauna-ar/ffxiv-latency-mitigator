@@ -11,7 +11,8 @@ void SequenceTracker::record_request(
     SequenceId sequence,
     TimePoint timestamp,
     bool is_cast,
-    float cast_duration_seconds
+    float cast_duration_seconds,
+    bool is_queued
 ) {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -31,7 +32,8 @@ void SequenceTracker::record_request(
         .sequence = sequence,
         .timestamp = timestamp,
         .is_cast = is_cast,
-        .cast_duration_seconds = cast_duration_seconds
+        .cast_duration_seconds = cast_duration_seconds,
+        .is_queued = is_queued
     });
 }
 
@@ -67,10 +69,13 @@ std::optional<ActionRequestInfo> SequenceTracker::match_response(
     }
 
     // 2. Secondary Strategy: Match oldest pending request with matching action_id
+    // Guard: Only match if either response sequence or request sequence is 0.
+    // Prevents cross-sequence request theft when different actions/sequences are in flight.
     if (action_id != 0) {
         auto it = std::find_if(m_pending.begin(), m_pending.end(),
-            [action_id](const ActionRequestInfo& req) {
-                return req.action_id == action_id;
+            [action_id, sequence](const ActionRequestInfo& req) {
+                const bool either_unsequenced = (sequence == 0 || req.sequence == 0);
+                return either_unsequenced && (req.action_id == action_id);
             });
 
         if (it != m_pending.end()) {

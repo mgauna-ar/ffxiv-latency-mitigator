@@ -237,3 +237,51 @@ TEST_CASE(SequenceTracker, GenericZeroSequenceFallbackMatchesUntrackedAction) {
     TEST_ASSERT_EQ(tracker.pending_count(), 0);
 }
 
+TEST_CASE(SequenceTracker, ConflictingSequencesDoNotMatchOnActionId) {
+    mitigator::SequenceTracker tracker;
+    const auto now = std::chrono::steady_clock::now();
+
+    // Client records request for action 0x1234 with sequence 10
+    tracker.record_request(0x1234, 10, now);
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    // Foreign player packet or mismatched sequence arrives for action 0x1234 with sequence 20
+    // Because both sequences are non-zero and conflicting (10 != 20), Strategy 2 MUST NOT match
+    auto m_mismatch = tracker.match_response(0x1234, 20, now + std::chrono::milliseconds(50));
+    TEST_ASSERT(!m_mismatch.has_value());
+    TEST_ASSERT_EQ(tracker.pending_count(), 1); // Request was NOT stolen
+
+    // Correct response with sequence 10 arrives and successfully matches
+    auto m_correct = tracker.match_response(0x1234, 10, now + std::chrono::milliseconds(80));
+    TEST_ASSERT(m_correct.has_value());
+    TEST_ASSERT_EQ(m_correct->action_id, 0x1234);
+    TEST_ASSERT_EQ(m_correct->sequence, 10);
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+}
+
+TEST_CASE(SequenceTracker, UnsequencedActionIdFallbackMatches) {
+    mitigator::SequenceTracker tracker;
+    const auto now = std::chrono::steady_clock::now();
+
+    // Case 1: Pending request has sequence 0 (unsequenced action), response has non-zero sequence 100
+    tracker.record_request(0x2001, 0, now);
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    auto m1 = tracker.match_response(0x2001, 100, now + std::chrono::milliseconds(50));
+    TEST_ASSERT(m1.has_value());
+    TEST_ASSERT_EQ(m1->action_id, 0x2001);
+    TEST_ASSERT_EQ(m1->sequence, 0);
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+
+    // Case 2: Pending request has non-zero sequence 200, response arrives with sequence 0
+    tracker.record_request(0x2002, 200, now);
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    auto m2 = tracker.match_response(0x2002, 0, now + std::chrono::milliseconds(50));
+    TEST_ASSERT(m2.has_value());
+    TEST_ASSERT_EQ(m2->action_id, 0x2002);
+    TEST_ASSERT_EQ(m2->sequence, 200);
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+}
+
+

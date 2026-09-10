@@ -16,11 +16,12 @@ void AnimationLockMitigator::record_action_request(
     SequenceId sequence,
     TimePoint timestamp,
     bool is_cast,
-    float cast_duration_seconds
+    float cast_duration_seconds,
+    bool is_queued
 ) {
     std::lock_guard<std::mutex> lock(m_mutex);
     ++m_total_actions_requested;
-    m_seq_tracker.record_request(action_id, sequence, timestamp, is_cast, cast_duration_seconds);
+    m_seq_tracker.record_request(action_id, sequence, timestamp, is_cast, cast_duration_seconds, is_queued);
 }
 
 MitigationResult AnimationLockMitigator::calculate_mitigation(
@@ -48,6 +49,8 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         res.smoothed_rtt_ms = m_rtt_tracker.get_smoothed_rtt_ms();
         return res;
     }
+
+    res.queued_action = matched_req->is_queued;
 
     // Check if active cast is in progress or if this effect corresponds to a casted action
     const bool is_cast_effect = matched_req->is_cast;
@@ -80,7 +83,13 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
 
     double effective_rtt = baseline_rtt;
 
-    if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
+    if (matched_req->is_queued) {
+        res.queued_action = true;
+        effective_rtt = baseline_rtt;
+        if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
+            measured_rtt = elapsed;
+        }
+    } else if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
         measured_rtt = elapsed;
         effective_rtt = measured_rtt;
         bool is_outlier = false;
@@ -94,40 +103,59 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
                 constants::JITTER_SPIKE_MULTIPLIER * jitter
             );
             if (effective_rtt > outlier_threshold) {
-                effective_rtt = median_rtt;
                 is_outlier = true;
-                res.spike_filtered = true;
             }
         } else if (is_cold_start) {
             // Cold-start protection: prior to having median filtering samples,
             // guard against initial handshake jitter, hitching, opening burst, or queue delays
+            const double cold_tolerance = std::max(constants::MIN_OUTLIER_TOLERANCE_MS, baseline_rtt * 0.5);
             const double cold_start_cap = (samples_before == 0)
-                ? 200.0
-                : (baseline_rtt + std::max(constants::MIN_OUTLIER_TOLERANCE_MS, baseline_rtt * 0.5));
+                ? std::max(200.0, baseline_rtt + cold_tolerance)
+                : (baseline_rtt + cold_tolerance);
             if (effective_rtt > cold_start_cap) {
-                effective_rtt = cold_start_cap;
                 is_outlier = true;
-                res.cold_start_guard = true;
             }
         }
 
-        // Ingest effective_rtt if outlier, preventing transient spikes from poisoning jitter & median
-        const double sample_to_ingest = is_outlier ? effective_rtt : measured_rtt;
-        m_rtt_tracker.add_sample(sample_to_ingest);
+        if (is_outlier) {
+            ++m_consecutive_outliers;
+            if (m_consecutive_outliers >= constants::CONSECUTIVE_OUTLIER_RESEED_THRESHOLD) {
+                m_rtt_tracker.reset(effective_rtt);
+                res.route_shift_reseeded = true;
+                m_consecutive_outliers = 0;
+            } else {
+                if (samples_before >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER) {
+                    effective_rtt = m_rtt_tracker.get_median_rtt_ms();
+                    res.spike_filtered = true;
+                } else {
+                    const double cold_tolerance = std::max(constants::MIN_OUTLIER_TOLERANCE_MS, baseline_rtt * 0.5);
+                    const double cold_start_cap = (samples_before == 0)
+                        ? std::max(200.0, baseline_rtt + cold_tolerance)
+                        : (baseline_rtt + cold_tolerance);
+                    effective_rtt = cold_start_cap;
+                    res.cold_start_guard = true;
+                }
+            }
+        } else {
+            m_consecutive_outliers = 0;
+        }
+
+        // Ingest sample into tracker unless route shift reseed just reset it with effective_rtt
+        if (!res.route_shift_reseeded) {
+            const double sample_to_ingest = is_outlier ? effective_rtt : measured_rtt;
+            m_rtt_tracker.add_sample(sample_to_ingest);
+        }
     }
 
     res.measured_rtt_ms = measured_rtt;
     res.smoothed_rtt_ms = m_rtt_tracker.get_smoothed_rtt_ms();
 
     // 2. Compute latency delta to mitigate: Delta = RTT - TargetPing - SafetyMargin
-    // Safety margin provides a conservative buffer to prevent over-reducing
-    double latency_delta = (effective_rtt - m_config.target_ping_ms) - m_config.safety_margin_ms;
-    if (latency_delta < 0.0) {
-        latency_delta = 0.0; // Already faster than target ping, no need to reduce
-    }
+    // Relative latency invariant: reduction must never exceed (effective_rtt - target_ping_ms)
+    const double max_allowed_reduction = std::max(0.0, (effective_rtt - m_config.target_ping_ms) - m_config.safety_margin_ms);
 
     // 3. Compute raw target animation lock
-    double target_lock = original_lock_ms - latency_delta;
+    double target_lock = original_lock_ms - max_allowed_reduction;
 
     // 4. Apply safety floors and ceilings (Anti-cheat & server anomaly protection)
     if (target_lock < m_config.min_animation_lock_ms) {
@@ -136,7 +164,9 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         ++m_total_floor_clamps;
     }
 
-    if (target_lock > m_config.max_animation_lock_ms) {
+    // Ceiling clamp: only apply to standard actions (original_lock_ms <= max_animation_lock_ms).
+    // Extended locks like Limit Breaks (3.8s–8.0s) or Potions must NOT be truncated to max ceiling.
+    if (original_lock_ms <= m_config.max_animation_lock_ms && target_lock > m_config.max_animation_lock_ms) {
         target_lock = m_config.max_animation_lock_ms;
         res.clamped_by_ceiling = true;
     }
@@ -233,6 +263,7 @@ void AnimationLockMitigator::reset() {
     m_total_actions_mitigated = 0;
     m_cumulative_time_saved_ms = 0.0;
     m_total_floor_clamps = 0;
+    m_consecutive_outliers = 0;
 }
 
 } // namespace mitigator
