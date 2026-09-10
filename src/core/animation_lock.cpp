@@ -101,6 +101,17 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         effective_rtt = baseline_rtt;
         if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
             measured_rtt = elapsed;
+            // Queued actions: if measured_rtt is a clean sample (not delayed by queue dwell time),
+            // or if the tracker is completely cold (0 samples), ingest it so the tracker is never starved.
+            // Otherwise, do not ingest the queue dwell delay into the tracker.
+            const double max_allowed_sample = (samples_before >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER)
+                ? (m_rtt_tracker.get_median_rtt_ms() + std::max(constants::MIN_OUTLIER_TOLERANCE_MS, constants::JITTER_SPIKE_MULTIPLIER * m_rtt_tracker.get_jitter_ms()))
+                : std::max(200.0, baseline_rtt + constants::MIN_OUTLIER_TOLERANCE_MS);
+            if (measured_rtt <= max_allowed_sample) {
+                m_rtt_tracker.add_sample(measured_rtt);
+            } else if (samples_before == 0) {
+                m_rtt_tracker.add_sample(baseline_rtt);
+            }
         }
     } else if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
         measured_rtt = elapsed;

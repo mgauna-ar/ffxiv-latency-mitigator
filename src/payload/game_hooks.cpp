@@ -248,6 +248,11 @@ static void ProcessActionEffect(game::ActionManager* mgr, game::ActionEffectHead
         original_lock_ms
     );
 
+    // If an action completes, clear any active cast tracking
+    if (mitigator->is_casting()) {
+        mitigator->record_cast_end();
+    }
+
     bool write_applied = false;
     if (result.applied) {
         const float new_lock_seconds = static_cast<float>(result.adjusted_lock_ms / constants::MS_PER_SECOND);
@@ -322,7 +327,10 @@ static void DetourReceiveActionEffectProtected(
     }
 
     const float new_lock = SafeReadAnimationLock(mgr);
-    if (new_lock <= old_lock || new_lock <= game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS || !std::isfinite(new_lock)) {
+    const bool lock_changed = (new_lock != old_lock);
+    const bool is_our_sequence = (effect_header->source_sequence != 0);
+
+    if ((!lock_changed && !is_our_sequence) || new_lock <= game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS || !std::isfinite(new_lock)) {
         return;
     }
 

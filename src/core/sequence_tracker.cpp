@@ -68,19 +68,17 @@ std::optional<ActionRequestInfo> SequenceTracker::match_response(
         }
     }
 
-    // 2. Secondary Strategy: Match oldest pending request with matching action_id
-    // Guard: Only match if either response sequence or request sequence is 0.
-    // Prevents cross-sequence request theft when different actions/sequences are in flight.
+    // 2. Secondary Strategy: Match by action_id
     if (action_id != 0) {
         if (sequence == 0) {
-            // Unsequenced server response:
-            // First look for an exact unsequenced request (sequence == 0) to avoid stealing a pending sequenced request.
+            // Unsequenced server response (e.g. potion, duty action, sprint):
+            // First prefer an unsequenced pending request
             auto it = std::find_if(m_pending.begin(), m_pending.end(),
                 [action_id](const ActionRequestInfo& req) {
                     return (req.sequence == 0) && (req.action_id == action_id);
                 });
 
-            // If no unsequenced request exists, fall back to matching the oldest pending sequenced request for this action.
+            // If no unsequenced request exists, fall back to matching the oldest pending request for this action
             if (it == m_pending.end()) {
                 it = std::find_if(m_pending.begin(), m_pending.end(),
                     [action_id](const ActionRequestInfo& req) {
@@ -94,12 +92,27 @@ std::optional<ActionRequestInfo> SequenceTracker::match_response(
                 return matched;
             }
         } else {
-            // Sequenced server response (Strategy 1 already verified no exact sequence match):
-            // Only match if the pending request is unsequenced (req.sequence == 0).
-            // Do NOT match if pending request has a different non-zero sequence (conflicting sequences).
+            // Sequenced server response where exact sequence did not match:
+            // Match if:
+            // a) Pending request was unsequenced (req.sequence == 0)
+            // b) Pending request was queued (in FFXIV, client sequence at queue time is N while server sequence is N+1)
+            // c) Server sequence is adjacent to request sequence (sequence == req.sequence + 1 or uint16 wraparound)
             auto it = std::find_if(m_pending.begin(), m_pending.end(),
-                [action_id](const ActionRequestInfo& req) {
-                    return (req.sequence == 0) && (req.action_id == action_id);
+                [action_id, sequence](const ActionRequestInfo& req) {
+                    if (req.action_id != action_id) {
+                        return false;
+                    }
+                    if (req.sequence == 0) {
+                        return true;
+                    }
+                    if (req.is_queued) {
+                        return true;
+                    }
+                    const uint16_t expected_next = static_cast<uint16_t>(req.sequence + 1);
+                    if (static_cast<uint16_t>(sequence) == expected_next) {
+                        return true;
+                    }
+                    return false;
                 });
 
             if (it != m_pending.end()) {
