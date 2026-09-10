@@ -64,6 +64,9 @@ namespace constants {
     constexpr uint32_t HOOK_DRAIN_TIMEOUT_MS = 2000;
     /// Polling sleep interval in milliseconds while waiting for detours to drain
     constexpr uint32_t HOOK_DRAIN_POLL_INTERVAL_MS = 10;
+
+    /// Number of consecutive outlier samples required to trigger an RTT tracker window reseed
+    inline constexpr size_t CONSECUTIVE_OUTLIER_RESEED_THRESHOLD = 4;
 }
 
 /// Configuration parameters for latency mitigation.
@@ -98,6 +101,7 @@ struct ActionRequestInfo {
     TimePoint timestamp{std::chrono::steady_clock::now()};
     bool is_cast{false};
     float cast_duration_seconds{0.0f};
+    bool is_queued{false};
 };
 
 /// Detailed outcome of an animation lock mitigation calculation.
@@ -137,6 +141,12 @@ struct MitigationResult {
 
     /// Whether this calculation triggered cold-start spike protection.
     bool cold_start_guard{false};
+
+    /// Whether this action was dispatched from the client queue buffer.
+    bool queued_action{false};
+
+    /// Whether a sustained routing shift triggered an RTT tracker reseed.
+    bool route_shift_reseeded{false};
 };
 
 /// Real-time session metrics and telemetry summary.

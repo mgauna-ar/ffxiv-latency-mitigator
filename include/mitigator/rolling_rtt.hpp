@@ -44,8 +44,8 @@ public:
     /// Adjusts the rolling window size.
     void set_window_size(size_t window_size);
 
-    /// Resets all statistics.
-    void reset(double initial_rtt_ms = 50.0);
+    /// Resets all statistics and reseeds baseline RTT.
+    void reset(double initial_sample = 50.0);
 
 private:
     mutable std::mutex m_mutex;
