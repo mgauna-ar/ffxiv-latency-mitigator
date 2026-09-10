@@ -58,25 +58,25 @@ namespace signatures {
     // Dawntrail 7.x (FFXIVClientStructs call-site): E8 ?? ?? ?? ?? 48 8B BC 24 ?? ?? ?? ?? 44 0F B6 F8 B0
     constexpr std::string_view USE_ACTION_LOCATION_PRIMARY =
         "E8 ? ? ? ? 48 8B BC 24 ? ? ? ? 44 0F B6 F8 B0";
-    // Dawntrail 7.0 - 7.1 call-site fallback:
+    // Dawntrail 7.x direct function prologue fallback:
     constexpr std::string_view USE_ACTION_LOCATION_FALLBACK =
-        "E8 ? ? ? ? 40 3A C7 0F 85 ? ? ? ?";
+        "48 89 5C 24 08 44 89 44 24 18 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 F1 48 81 EC F0 00 00 00";
 
     // 2. Zone action effect processing: ActionEffectHandler::ReceiveActionEffect
     // Dawntrail 7.x (FFXIVClientStructs call-site): E8 ?? ?? ?? ?? 48 8B 8D ?? ?? ?? ?? 48 33 CC E8 ?? ?? ?? ?? 48 81 C4 00 05 00 00
     constexpr std::string_view RECEIVE_ACTION_EFFECT_PRIMARY =
         "E8 ? ? ? ? 48 8B 8D ? ? ? ? 48 33 CC E8 ? ? ? ? 48 81 C4 00 05 00 00";
-    // Dawntrail 7.0 - 7.1 function prologue fallback:
+    // Dawntrail 7.x function prologue fallback (verified unique):
     constexpr std::string_view RECEIVE_ACTION_EFFECT_FALLBACK =
-        "40 55 56 57 41 54 41 55 41 56 48 8D AC 24 ? ? ? ? 48 81 EC ? ? ? ? 48 8B 05";
+        "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 ? ? ? ? 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 45 ? 4C 8B BD ? ? ? ? 8B D9";
 
     // 3. ActionManager static instance resolution instruction
     // Dawntrail 7.x (FFXIVClientStructs): LEA rcx, [rip + disp32] followed by movss xmm2, [rbx]
     constexpr std::string_view ACTION_MANAGER_INSTANCE_PRIMARY =
         "48 8D 0D ? ? ? ? F3 0F 10 13";
-    // Dawntrail fallback:
+    // Dawntrail 7.x alternative reference fallback (verified unique):
     constexpr std::string_view ACTION_MANAGER_INSTANCE_FALLBACK =
-        "48 8D 0D ? ? ? ? 88";
+        "48 8D 0D ? ? ? ? 48 89 74 24 40 48 89 7C 24";
 } // namespace signatures
 
 } // namespace mitigator::game
