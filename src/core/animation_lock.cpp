@@ -37,7 +37,10 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
     res.original_lock_ms = original_lock_ms;
 
     // 1. Try to correlate with recorded outgoing action request
-    const auto matched_req = m_seq_tracker.match_response(action_id, sequence, now);
+    const double expected_rtt = (m_rtt_tracker.sample_count() > 0)
+        ? m_rtt_tracker.get_smoothed_rtt_ms()
+        : 0.0;
+    const auto matched_req = m_seq_tracker.match_response(action_id, sequence, now, expected_rtt);
     if (!matched_req.has_value()) {
         // Untracked server effect (party member, enemy, or zone-wide effect):
         // Safely pass through without modifying game memory to prevent lock corruption.

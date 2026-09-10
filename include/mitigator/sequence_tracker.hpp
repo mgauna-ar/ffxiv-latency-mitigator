@@ -37,7 +37,8 @@ public:
     [[nodiscard]] std::optional<ActionRequestInfo> match_response(
         ActionId action_id,
         SequenceId sequence,
-        TimePoint timestamp = std::chrono::steady_clock::now()
+        TimePoint timestamp = std::chrono::steady_clock::now(),
+        double expected_rtt_ms = 0.0
     );
 
     /**
