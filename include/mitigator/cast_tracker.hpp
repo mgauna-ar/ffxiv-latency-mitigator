@@ -39,10 +39,10 @@ public:
 
 private:
     mutable std::mutex m_mutex;
-    bool m_is_casting{false};
-    ActionId m_cast_action_id{0};
+    mutable bool m_is_casting{false};
+    mutable ActionId m_cast_action_id{0};
     TimePoint m_cast_start{std::chrono::steady_clock::now()};
-    float m_cast_duration_seconds{0.0f};
+    mutable float m_cast_duration_seconds{0.0f};
 };
 
 } // namespace mitigator

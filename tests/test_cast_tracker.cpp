@@ -58,3 +58,31 @@ TEST_CASE(CastTracker, DynamicGraceWindowWithHighPing) {
     TEST_ASSERT(!tracker.is_casting(t_check, 0.0)); // Expired with default 100ms window
     TEST_ASSERT(tracker.is_casting(t_check, 250.0)); // Still protected with dynamic RTT grace
 }
+
+TEST_CASE(CastTracker, AbsoluteCastTimeoutEvictsStaleState) {
+    mitigator::CastTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Player begins 5.0s Teleport cast, then enters loading screen / zone transition
+    tracker.on_cast_begin(0x00DD, 5.0f, t0);
+    TEST_ASSERT(tracker.is_casting(t0));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0x00DD);
+
+    // 35 seconds later (well past ABSOLUTE_MAX_CAST_DURATION_SECONDS = 30s)
+    const auto t_zone = t0 + std::chrono::seconds(35);
+    TEST_ASSERT(!tracker.is_casting(t_zone));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0);
+    TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t_zone), 0.0f, 0.001f);
+}
+
+TEST_CASE(CastTracker, NegativeElapsedDoesNotEvaluateAsCasting) {
+    mitigator::CastTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    tracker.on_cast_begin(0x00EE, 2.5f, t0);
+
+    // Simulated clock jump backwards
+    const auto t_before = t0 - std::chrono::seconds(5);
+    TEST_ASSERT(!tracker.is_casting(t_before));
+    TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t_before), 0.0f, 0.001f);
+}

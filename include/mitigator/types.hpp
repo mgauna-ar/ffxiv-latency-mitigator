@@ -46,6 +46,8 @@ namespace constants {
     constexpr float CAST_COMPLETION_GRACE_WINDOW_SECONDS = 0.1f;
     /// Base buffer added to dynamic cast grace window in seconds
     constexpr float CAST_GRACE_BASE_BUFFER_SECONDS = 0.050f;
+    /// Absolute hard timeout for stale cast states (e.g. zone transitions, cutscenes, death)
+    constexpr float ABSOLUTE_MAX_CAST_DURATION_SECONDS = 30.0f;
     /// Ratio of RTT representing one-way client-to-server or server-to-client latency
     constexpr double ONE_WAY_LATENCY_RATIO = 0.5;
 
