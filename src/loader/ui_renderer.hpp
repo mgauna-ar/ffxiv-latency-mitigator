@@ -62,9 +62,10 @@ struct GuardCounters {
  */
 class UiRenderer {
 public:
-    static constexpr size_t DASHBOARD_WIDTH = 100;
+    static constexpr size_t DASHBOARD_WIDTH = 78;
     static constexpr size_t INNER_WIDTH = DASHBOARD_WIDTH - 2;
     static constexpr size_t RING_BUFFER_CAPACITY = 12;
+    static constexpr size_t DASHBOARD_DISPLAY_ROWS = 6;
 
     UiRenderer();
 
