@@ -139,6 +139,17 @@ void UiRenderer::set_session_info(uint32_t pid, uint32_t hook_count, double targ
     m_dirty = true;
 }
 
+void UiRenderer::set_connection_status(const std::string& status) {
+    std::lock_guard<std::mutex> lock(m_render_mutex);
+    m_connection_status = status;
+    m_dirty = true;
+}
+
+std::string UiRenderer::connection_status() const {
+    std::lock_guard<std::mutex> lock(m_render_mutex);
+    return m_connection_status;
+}
+
 void UiRenderer::set_dashboard_mode(bool enabled) {
     std::lock_guard<std::mutex> lock(m_render_mutex);
     m_dashboard_mode = enabled;
@@ -307,9 +318,15 @@ void UiRenderer::render_dashboard(bool dry_run, bool verbose) {
 
     // Target process metadata
     std::ostringstream meta_ss;
-    meta_ss << "Target: " << color::GREEN << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
-            << " (PID: " << m_pid << ") │ Detours: " << color::GREEN << m_hook_count << "/" << game::definitions::TOTAL_AVAILABLE_HOOKS << " Active" << color::RESET
-            << " │ Mode: " << (dry_run ? std::string(color::YELLOW) + "DRY-RUN" : std::string(color::GREEN) + "ACTIVE") << color::RESET;
+    if (m_pid == 0) {
+        meta_ss << "Target: " << color::YELLOW << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
+                << " │ Status: " << color::CYAN << m_connection_status << color::RESET
+                << " │ Mode: " << (dry_run ? std::string(color::YELLOW) + "DRY-RUN" : std::string(color::GREEN) + "ACTIVE") << color::RESET;
+    } else {
+        meta_ss << "Target: " << color::GREEN << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
+                << " (PID: " << m_pid << ") │ Detours: " << color::GREEN << m_hook_count << "/" << game::definitions::TOTAL_AVAILABLE_HOOKS << " Active" << color::RESET
+                << " │ Mode: " << (dry_run ? std::string(color::YELLOW) + "DRY-RUN" : std::string(color::GREEN) + "ACTIVE") << color::RESET;
+    }
     std::cout << make_box_row(meta_ss.str(), INNER_WIDTH) << "\033[K\n";
 
     // Two-column split separator (37 left, 38 right -> 78 total with 3 borders)
@@ -429,7 +446,11 @@ void UiRenderer::render_dashboard(bool dry_run, bool verbose) {
             row_ss << color::YELLOW << tags << color::RESET;
             std::cout << make_box_row(row_ss.str(), INNER_WIDTH) << "\033[K\n";
         } else {
-            std::cout << make_box_row(std::string(color::GRAY) + "   --   │ --  │  --  │        --        │  --   │     --     │    --" + color::RESET, INNER_WIDTH) << "\033[K\n";
+            if (entries_count == 0 && i == 0) {
+                std::cout << make_box_row(std::string(color::GRAY) + "   --   │ --  │  --  │  [Waiting for game process & actions...]  │" + color::RESET, INNER_WIDTH) << "\033[K\n";
+            } else {
+                std::cout << make_box_row(std::string(color::GRAY) + "   --   │ --  │  --  │        --        │  --   │     --     │    --" + color::RESET, INNER_WIDTH) << "\033[K\n";
+            }
         }
     }
 

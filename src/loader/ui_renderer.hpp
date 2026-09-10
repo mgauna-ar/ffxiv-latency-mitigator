@@ -72,6 +72,12 @@ public:
     /// Configures session metadata for dashboard rendering.
     void set_session_info(uint32_t pid, uint32_t hook_count, double target_ping_ms, bool dry_run);
 
+    /// Sets the dynamic connection/standby status message displayed on the dashboard.
+    void set_connection_status(const std::string& status);
+
+    /// Gets the current connection status message.
+    [[nodiscard]] std::string connection_status() const;
+
     /// Enables or disables in-place split-screen dashboard mode.
     void set_dashboard_mode(bool enabled);
 
@@ -151,6 +157,7 @@ private:
     bool m_dry_run{false};
     bool m_dashboard_mode{false};
     bool m_dirty{true};
+    std::string m_connection_status{"Waiting for game to launch..."};
 };
 
 } // namespace mitigator::loader

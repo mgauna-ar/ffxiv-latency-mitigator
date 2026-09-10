@@ -33,6 +33,46 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
     return FALSE;
 }
 
+void configure_fixed_console(HANDLE hOut, SHORT cols = 80, SHORT rows = 25) {
+    if (!hOut || hOut == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    SMALL_RECT temp_rect = {0, 0, 1, 1};
+    SetConsoleWindowInfo(hOut, TRUE, &temp_rect);
+
+    COORD buffer_size = {cols, rows};
+    SetConsoleScreenBufferSize(hOut, buffer_size);
+
+    SMALL_RECT window_rect = {0, 0, static_cast<SHORT>(cols - 1), static_cast<SHORT>(rows - 1)};
+    SetConsoleWindowInfo(hOut, TRUE, &window_rect);
+
+    HWND hwnd = GetConsoleWindow();
+    if (hwnd) {
+        LONG style = GetWindowLong(hwnd, GWL_STYLE);
+        style &= ~(WS_MAXIMIZEBOX | WS_THICKFRAME);
+        SetWindowLong(hwnd, GWL_STYLE, style);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+}
+
+void restore_scrollable_console(HANDLE hOut) {
+    if (!hOut || hOut == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    COORD buffer_size = {80, 300};
+    SetConsoleScreenBufferSize(hOut, buffer_size);
+
+    HWND hwnd = GetConsoleWindow();
+    if (hwnd) {
+        LONG style = GetWindowLong(hwnd, GWL_STYLE);
+        style |= (WS_MAXIMIZEBOX | WS_THICKFRAME);
+        SetWindowLong(hwnd, GWL_STYLE, style);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+}
+
 void wait_for_user_exit() {
     HWND console_wnd = GetConsoleWindow();
     if (console_wnd) {
@@ -136,7 +176,8 @@ std::optional<mitigator::loader::ProcessInfo> find_target_process(uint32_t exclu
     return std::nullopt;
 }
 
-std::optional<mitigator::loader::ProcessInfo> wait_for_target_process(uint32_t exclude_pid) {
+template <typename F>
+std::optional<mitigator::loader::ProcessInfo> wait_for_target_process(uint32_t exclude_pid, F&& on_tick) {
     int denied_retries = 0;
     constexpr int MAX_DENIED_RETRIES = 10;
 
@@ -153,11 +194,17 @@ std::optional<mitigator::loader::ProcessInfo> wait_for_target_process(uint32_t e
             denied_retries = 0;
         }
 
-        if (!interruptible_sleep(std::chrono::milliseconds(500))) {
+        on_tick();
+
+        if (!interruptible_sleep(std::chrono::milliseconds(250))) {
             return std::nullopt;
         }
     }
     return std::nullopt;
+}
+
+inline std::optional<mitigator::loader::ProcessInfo> wait_for_target_process(uint32_t exclude_pid) {
+    return wait_for_target_process(exclude_pid, []() {});
 }
 
 } // anonymous namespace
@@ -199,6 +246,8 @@ int main(int argc, char* argv[]) {
         SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
 
+    configure_fixed_console(hOut, 80, 25);
+
     mitigator::loader::UiRenderer ui;
     mitigator::loader::LoaderIpcServer ipc_server;
 
@@ -211,6 +260,7 @@ int main(int argc, char* argv[]) {
     ipc_server.set_status_callback([&](const mitigator::ipc::StatusPayload& s) {
         ui.set_session_info(s.game_pid, s.hooks_installed, target_ping_ms, dry_run);
         if (s.hooks_installed < mitigator::game::definitions::MIN_REQUIRED_PRIMARY_HOOKS) {
+            restore_scrollable_console(hOut);
             ui.render_header(s.game_pid, s.hooks_installed, target_ping_ms, dry_run);
             ui.log_status(
                 "Game update detected! Signature scan failed (" +
@@ -220,6 +270,7 @@ int main(int argc, char* argv[]) {
             ui.log_status("Game memory is safe and untouched. Payload automatically self-unloaded.", false);
             ui.log_status("Update signatures in include/mitigator/game_definitions.hpp to support this patch.", false);
         } else {
+            ui.set_connection_status("Connected");
             ui.set_dashboard_mode(true);
             ui.render_dashboard(dry_run, verbose);
         }
@@ -237,6 +288,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (disk_payload_path.empty()) {
+        restore_scrollable_console(hOut);
         ui.log_status("mitigator_payload.dll was not found!", true);
         ui.log_status("Please ensure 'mitigator_payload.dll' is placed in the same folder as ffxiv-mitigator.exe.", false);
         wait_for_user_exit();
@@ -248,14 +300,52 @@ int main(int argc, char* argv[]) {
     int consecutive_failures = 0;
     constexpr int MAX_BACKOFF_MS = 8000;
 
-    while (g_keep_running.load()) {
-        if (last_pid == 0) {
-            std::cout << "[*] Searching for " << mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME << "...\n";
-            std::cout << "[*] Waiting for " << mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME << " to launch (Press 'Q' or Ctrl+C to abort)...\n";
-        }
+    ui.set_dashboard_mode(true);
+    ui.set_session_info(0, 0, target_ping_ms, dry_run);
+    ui.set_connection_status("Searching for " + std::string(mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME) + "...");
+    ui.render_dashboard(dry_run, verbose);
 
-        auto proc = wait_for_target_process(last_pid);
-        if (!proc.has_value()) {
+    while (g_keep_running.load()) {
+        ui.set_session_info(0, 0, target_ping_ms, dry_run);
+        ui.set_connection_status("Searching for " + std::string(mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME) + "...");
+        ui.render_dashboard(dry_run, verbose);
+
+        auto on_search_tick = [&]() {
+            if (_kbhit()) {
+                const int key = _getch();
+                switch (key) {
+                    case 'q':
+                    case 'Q':
+                        g_keep_running = false;
+                        break;
+                    case 'd':
+                    case 'D':
+                        dry_run = !dry_run;
+                        ui.set_session_info(0, 0, target_ping_ms, dry_run);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    case 'l':
+                    case 'L':
+                        verbose = !verbose;
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    case 'c':
+                    case 'C':
+                        ui.reset_stats();
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    case 's':
+                    case 'S':
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    default:
+                        break;
+                }
+            }
+        };
+
+        auto proc = wait_for_target_process(last_pid, on_search_tick);
+        if (!proc.has_value() || !g_keep_running.load()) {
             break;
         }
 
@@ -263,16 +353,19 @@ int main(int argc, char* argv[]) {
         proc->handle = proc_handle.get();
 
         if (!proc_handle) {
-            ui.log_status(
-                "Access denied opening game process (PID: " + std::to_string(proc->pid) +
-                ", Win32 Error: " + std::to_string(proc->last_error) + ").",
-                true
-            );
-            ui.log_status(
-                "FFXIV is running with Administrator privileges. Please re-run ffxiv-mitigator as Administrator (or launch FFXIV via XIVLauncher without Admin).",
-                false
-            );
+            ui.set_connection_status("Access Denied (Admin Privileges Required)");
+            ui.render_dashboard(dry_run, verbose);
             if (!watch_mode) {
+                restore_scrollable_console(hOut);
+                ui.log_status(
+                    "Access denied opening game process (PID: " + std::to_string(proc->pid) +
+                    ", Win32 Error: " + std::to_string(proc->last_error) + ").",
+                    true
+                );
+                ui.log_status(
+                    "FFXIV is running with Administrator privileges. Please re-run ffxiv-mitigator as Administrator (or launch FFXIV via XIVLauncher without Admin).",
+                    false
+                );
                 wait_for_user_exit();
                 return 1;
             }
@@ -281,12 +374,15 @@ int main(int argc, char* argv[]) {
         }
 
         if (!proc->is_64_bit) {
-            ui.log_status(
-                std::string("Detected process is not a 64-bit executable. Only 64-bit FFXIV (") +
-                std::string(mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME) + ") is supported.",
-                true
-            );
+            ui.set_connection_status("Unsupported Architecture (Not 64-bit)");
+            ui.render_dashboard(dry_run, verbose);
             if (!watch_mode) {
+                restore_scrollable_console(hOut);
+                ui.log_status(
+                    std::string("Detected process is not a 64-bit executable. Only 64-bit FFXIV (") +
+                    std::string(mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME) + ") is supported.",
+                    true
+                );
                 wait_for_user_exit();
                 return 1;
             }
@@ -294,23 +390,24 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        std::cout << "[+] Found game process! PID: " << proc->pid << "\n";
-
         if (mitigator::loader::DllInjector::is_payload_already_loaded(*proc)) {
-            ui.log_status(
-                "An existing mitigator payload DLL is ALREADY loaded in game process (PID " +
-                std::to_string(proc->pid) + ").",
-                true
-            );
-            ui.log_status(
-                "Windows cannot reload updated code into an already-injected game process.",
-                true
-            );
-            ui.log_status(
-                "Please completely CLOSE and REOPEN Final Fantasy XIV, then run ffxiv-mitigator again.",
-                true
-            );
+            ui.set_connection_status("Payload Already Injected (Restart Game Required)");
+            ui.render_dashboard(dry_run, verbose);
             if (!watch_mode) {
+                restore_scrollable_console(hOut);
+                ui.log_status(
+                    "An existing mitigator payload DLL is ALREADY loaded in game process (PID " +
+                    std::to_string(proc->pid) + ").",
+                    true
+                );
+                ui.log_status(
+                    "Windows cannot reload updated code into an already-injected game process.",
+                    true
+                );
+                ui.log_status(
+                    "Please completely CLOSE and REOPEN Final Fantasy XIV, then run ffxiv-mitigator again.",
+                    true
+                );
                 wait_for_user_exit();
                 return 1;
             }
@@ -326,10 +423,16 @@ int main(int argc, char* argv[]) {
         }
 
         // Initialize Named Pipe server for this session
-        std::cout << "[*] Starting IPC server...\n";
+        ui.set_session_info(proc->pid, 0, target_ping_ms, dry_run);
+        ui.set_connection_status("Starting IPC server...");
+        ui.render_dashboard(dry_run, verbose);
+
         if (!ipc_server.start()) {
-            ui.log_status("Failed to initialize Named Pipe server", true);
+            ui.set_connection_status("Failed to initialize Named Pipe server");
+            ui.render_dashboard(dry_run, verbose);
             if (!watch_mode) {
+                restore_scrollable_console(hOut);
+                ui.log_status("Failed to initialize Named Pipe server", true);
                 wait_for_user_exit();
                 return 1;
             }
@@ -337,27 +440,33 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        std::cout << "[*] Injecting payload: " << disk_payload_path.string() << "...\n";
+        ui.set_connection_status("Injecting payload DLL...");
+        ui.render_dashboard(dry_run, verbose);
         const bool injected = injector.inject(*proc, disk_payload_path);
 
         if (!injected) {
-            ui.log_status("Failed to inject payload DLL into game process.", true);
-            if (!injector.last_error().empty()) {
-                ui.log_status("Reason: " + injector.last_error(), false);
-            }
+            ui.set_connection_status("Failed to inject payload DLL");
+            ui.render_dashboard(dry_run, verbose);
             ipc_server.stop();
             if (!watch_mode) {
+                restore_scrollable_console(hOut);
+                ui.log_status("Failed to inject payload DLL into game process.", true);
+                if (!injector.last_error().empty()) {
+                    ui.log_status("Reason: " + injector.last_error(), false);
+                }
                 wait_for_user_exit();
                 return 1;
             }
             ++consecutive_failures;
             const int backoff_ms = (std::min)(1000 * (1 << (consecutive_failures - 1)), MAX_BACKOFF_MS);
-            ui.log_status("Retrying injection in " + std::to_string(backoff_ms / 1000) + "s...");
+            ui.set_connection_status("Retrying injection in " + std::to_string(backoff_ms / 1000) + "s...");
+            ui.render_dashboard(dry_run, verbose);
             interruptible_sleep(std::chrono::milliseconds(backoff_ms));
             continue;
         }
 
-        std::cout << "[+] Payload successfully injected. Awaiting IPC telemetry handshake...\n";
+        ui.set_connection_status("Injected - Awaiting telemetry handshake...");
+        ui.render_dashboard(dry_run, verbose);
 
         // Wait for payload to connect to pipe and complete handshake
         int wait_ticks = 0;
@@ -367,6 +476,13 @@ int main(int argc, char* argv[]) {
             if (proc_handle && WaitForSingleObject(proc_handle.get(), 0) == WAIT_OBJECT_0) {
                 break; // Process died during handshake
             }
+            if (_kbhit()) {
+                const int key = _getch();
+                if (key == 'q' || key == 'Q') {
+                    g_keep_running = false;
+                    break;
+                }
+            }
             std::this_thread::sleep_for(HANDSHAKE_POLL_INTERVAL);
         }
 
@@ -375,6 +491,15 @@ int main(int argc, char* argv[]) {
             // Detour installation failed in game; status callback already displayed diagnostic
             ipc_server.stop();
             if (!watch_mode) {
+                restore_scrollable_console(hOut);
+                ui.render_header(proc->pid, last_status->hooks_installed, target_ping_ms, dry_run);
+                ui.log_status(
+                    "Game update detected! Signature scan failed (" +
+                    std::string(last_status->status_message) + ").",
+                    true
+                );
+                ui.log_status("Game memory is safe and untouched. Payload automatically self-unloaded.", false);
+                ui.log_status("Update signatures in include/mitigator/game_definitions.hpp to support this patch.", false);
                 wait_for_user_exit();
                 return 1;
             }
@@ -383,13 +508,16 @@ int main(int argc, char* argv[]) {
         }
 
         if (!ipc_server.has_received_status()) {
-            ui.log_status("Handshake timed out. Injected payload did not establish IPC telemetry.", true);
-            ui.log_status("Possible causes:", true);
-            ui.log_status("  1. Privilege mismatch: Ensure both game and mitigator are run with matching privileges (e.g. Run as administrator).", false);
-            ui.log_status("  2. Antivirus or security software blocked remote thread execution.", false);
-            ui.log_status("  3. Third-party overlay or hook conflict.", false);
+            ui.set_connection_status("Handshake timed out");
+            ui.render_dashboard(dry_run, verbose);
             ipc_server.stop();
             if (!watch_mode) {
+                restore_scrollable_console(hOut);
+                ui.log_status("Handshake timed out. Injected payload did not establish IPC telemetry.", true);
+                ui.log_status("Possible causes:", true);
+                ui.log_status("  1. Privilege mismatch: Ensure both game and mitigator are run with matching privileges (e.g. Run as administrator).", false);
+                ui.log_status("  2. Antivirus or security software blocked remote thread execution.", false);
+                ui.log_status("  3. Third-party overlay or hook conflict.", false);
                 wait_for_user_exit();
                 return 1;
             }
@@ -406,6 +534,10 @@ int main(int argc, char* argv[]) {
         ipc_server.set_target_ping(static_cast<float>(target_ping_ms));
         ipc_server.set_min_lock(static_cast<float>(min_lock_ms));
 
+        ui.set_connection_status("Connected");
+        ui.set_session_info(proc->pid, last_status->hooks_installed, target_ping_ms, dry_run);
+        ui.render_dashboard(dry_run, verbose);
+
         // Interactive hotkey input loop with decoupled dashboard refresh
         auto last_dashboard_render = std::chrono::steady_clock::now();
         constexpr auto DASHBOARD_TICK_INTERVAL = std::chrono::milliseconds(250);
@@ -413,7 +545,6 @@ int main(int argc, char* argv[]) {
 
         while (g_keep_running.load()) {
             if (proc_handle && WaitForSingleObject(proc_handle.get(), 0) == WAIT_OBJECT_0) {
-                std::cout << "\n[!] Game process (PID " << proc->pid << ") terminated.\n";
                 break;
             }
 
@@ -433,7 +564,6 @@ int main(int argc, char* argv[]) {
                 switch (key) {
                     case 'q':
                     case 'Q':
-                        std::cout << "\n[!] 'Q' pressed. Sending clean unhook command to game...\n";
                         g_keep_running = false;
                         break;
                     case 'd':
@@ -485,13 +615,16 @@ int main(int argc, char* argv[]) {
 
         // Clean unhooking sequence if game process is still alive
         if (proc_handle && WaitForSingleObject(proc_handle.get(), 0) != WAIT_OBJECT_0) {
-            std::cout << "[*] Detaching from game process and restoring detours...\n";
+            ui.set_connection_status("Detaching and restoring detours...");
+            ui.render_dashboard(dry_run, verbose);
             ipc_server.request_unhook();
             std::this_thread::sleep_for(UNHOOK_DRAIN_DELAY);
         }
 
         ipc_server.stop();
         proc_handle.reset();
+
+        restore_scrollable_console(hOut);
         ui.render_final_report();
 
         if (!watch_mode || !g_keep_running.load()) {
@@ -499,11 +632,10 @@ int main(int argc, char* argv[]) {
         }
 
         ui.reset_stats();
-        std::cout << "\n" << std::string(67, '-') << "\n";
-        ui.log_status("Watch mode active. Waiting for " + std::string(mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME) + " to launch (Press 'Q' to quit)...");
-        std::cout << std::string(67, '-') << "\n";
+        configure_fixed_console(hOut, 80, 25);
     }
 
+    restore_scrollable_console(hOut);
     std::cout << "[+] Done. Clean exit completed.\n";
     wait_for_user_exit();
     return 0;

@@ -334,6 +334,29 @@ TEST_CASE(UiRenderer, DashboardRenderLayoutAndBorders) {
     TEST_ASSERT(out.find("Controls:") != std::string::npos);
 }
 
+TEST_CASE(UiRenderer, DashboardStandbyModeBeforeGameLaunches) {
+    mitigator::loader::UiRenderer renderer;
+    renderer.set_session_info(0, 0, 15.0, false);
+    renderer.set_dashboard_mode(true);
+    renderer.set_connection_status("Searching for ffxiv_dx11.exe...");
+
+    CoutRedirect redirect;
+    renderer.render_dashboard(false, false);
+    const std::string out = redirect.str();
+
+    TEST_ASSERT(out.find("\033[H") != std::string::npos);
+    TEST_ASSERT(out.find("LIVE COMBAT DASHBOARD") != std::string::npos);
+    TEST_ASSERT(out.find("Target: ") != std::string::npos);
+    TEST_ASSERT(out.find("ffxiv_dx11.exe") != std::string::npos);
+    TEST_ASSERT(out.find("Status: ") != std::string::npos);
+    TEST_ASSERT(out.find("Searching for ffxiv_dx11.exe...") != std::string::npos);
+    TEST_ASSERT(out.find("Mode: ") != std::string::npos);
+    TEST_ASSERT(out.find("ACTIVE") != std::string::npos);
+    TEST_ASSERT(out.find("[Waiting for game process & actions...]") != std::string::npos);
+    TEST_ASSERT(out.find("Controls:") != std::string::npos);
+    TEST_ASSERT(renderer.connection_status() == "Searching for ffxiv_dx11.exe...");
+}
+
 TEST_CASE(UiRenderer, FinalSessionReportCard) {
     mitigator::loader::UiRenderer renderer;
     renderer.set_session_info(1234, 2, 15.0, false);
