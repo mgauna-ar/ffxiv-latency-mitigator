@@ -21,6 +21,20 @@ void SequenceTracker::record_request(
         m_pending.pop_front();
     }
 
+    // Duplicate sequence detection (2C):
+    // If a request with the exact same non-zero sequence already exists in the queue
+    // (e.g. client re-dispatch or sequence wraparound before server ack),
+    // remove the stale duplicate so it doesn't linger as a ghost entry.
+    if (sequence != 0) {
+        auto it = std::find_if(m_pending.begin(), m_pending.end(),
+            [sequence](const ActionRequestInfo& req) {
+                return req.sequence == sequence;
+            });
+        if (it != m_pending.end()) {
+            m_pending.erase(it);
+        }
+    }
+
     // Guard against unbounded queue growth under abnormal conditions
     if (m_pending.size() >= MAX_PENDING_ENTRIES) {
         m_pending.pop_front();

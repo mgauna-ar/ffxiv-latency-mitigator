@@ -171,3 +171,56 @@ TEST_CASE(SequenceTracker, ZeroSequenceAndZeroActionIdDoesNotMatch) {
     TEST_ASSERT_EQ(real_match->sequence, 10);
     TEST_ASSERT_EQ(tracker.pending_count(), 0);
 }
+
+TEST_CASE(SequenceTracker, DuplicateSequenceReplacesStaleRequest) {
+    mitigator::SequenceTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Request 1: Action 0x1001 dispatched with sequence 50
+    tracker.record_request(0x1001, 50, t0);
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    // Request 2: Re-dispatch or sequence reuse with same sequence 50 200ms later
+    const auto t1 = t0 + std::chrono::milliseconds(200);
+    tracker.record_request(0x1002, 50, t1);
+
+    // Queue must NOT contain duplicate entries for the same non-zero sequence
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    // Response arrives at t0 + 260ms (60ms after second request)
+    const auto t_recv = t0 + std::chrono::milliseconds(260);
+    auto matched = tracker.match_response(0x1002, 50, t_recv);
+
+    TEST_ASSERT(matched.has_value());
+    TEST_ASSERT_EQ(matched->action_id, 0x1002);
+    TEST_ASSERT_EQ(matched->sequence, 50);
+
+    // Elapsed should be 60ms (against t1), NOT 260ms (against t0)
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t_recv - matched->timestamp).count();
+    TEST_ASSERT_EQ(elapsed, 60);
+
+    // No ghost entry left behind
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+}
+
+TEST_CASE(SequenceTracker, ZeroSequenceAllowsMultiplePending) {
+    mitigator::SequenceTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Multiple distinct unsequenced actions (sequence = 0) must coexist
+    tracker.record_request(0x2001, 0, t0);
+    tracker.record_request(0x2002, 0, t0 + std::chrono::milliseconds(10));
+    TEST_ASSERT_EQ(tracker.pending_count(), 2);
+
+    // Matching 0x2001 leaves 0x2002
+    auto m1 = tracker.match_response(0x2001, 0, t0 + std::chrono::milliseconds(50));
+    TEST_ASSERT(m1.has_value());
+    TEST_ASSERT_EQ(m1->action_id, 0x2001);
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    // Matching 0x2002 empties queue
+    auto m2 = tracker.match_response(0x2002, 0, t0 + std::chrono::milliseconds(60));
+    TEST_ASSERT(m2.has_value());
+    TEST_ASSERT_EQ(m2->action_id, 0x2002);
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+}
