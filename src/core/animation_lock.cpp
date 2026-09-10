@@ -136,7 +136,8 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         ++m_total_floor_clamps;
     }
 
-    if (target_lock > m_config.max_animation_lock_ms) {
+    // Only clamp standard actions against ceiling; never truncate extended animation locks (Limit Breaks, Potions)
+    if (original_lock_ms <= m_config.max_animation_lock_ms && target_lock > m_config.max_animation_lock_ms) {
         target_lock = m_config.max_animation_lock_ms;
         res.clamped_by_ceiling = true;
     }

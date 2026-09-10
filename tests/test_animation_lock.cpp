@@ -278,14 +278,15 @@ TEST_CASE(AnimationLock, MaxAnimationLockCeilingClamping) {
     mitigator::AnimationLockMitigator engine(cfg);
     const auto t0 = std::chrono::steady_clock::now();
 
-    // High incoming animation lock (e.g. limit break: 3000ms) with small 35ms RTT
+    // 1. High incoming animation lock (e.g. limit break: 3000ms) with small 35ms RTT
+    // Must be reduced only by network latency delta (35 - 15 = 20ms -> 2980ms), NEVER truncated to 2000ms
     engine.record_action_request(0x0ABC, 60, t0);
     const auto t_recv = t0 + std::chrono::milliseconds(35);
     const auto res = engine.calculate_mitigation(0x0ABC, 60, 3000.0, t_recv);
 
-    // Target lock = 3000 - (35 - 15) = 2980ms -> clamped to max ceiling 2000ms
-    TEST_ASSERT(res.clamped_by_ceiling);
-    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 2000.0, 0.001);
+    TEST_ASSERT(!res.clamped_by_ceiling);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 2980.0, 0.001);
+    TEST_ASSERT_NEAR(res.delay_reduced_ms, 20.0, 0.001);
 }
 
 TEST_CASE(AnimationLock, ConservativeSafetyMargin) {
