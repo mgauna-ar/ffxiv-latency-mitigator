@@ -155,8 +155,8 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         res.applied = (res.delay_reduced_ms > 0.0);
     }
 
-    // 6. Update session telemetry
-    if (res.delay_reduced_ms > 0.0) {
+    // 6. Update session telemetry (only if mitigation was actually applied to game memory)
+    if (res.applied) {
         ++m_total_actions_mitigated;
         m_cumulative_time_saved_ms += res.delay_reduced_ms;
     }

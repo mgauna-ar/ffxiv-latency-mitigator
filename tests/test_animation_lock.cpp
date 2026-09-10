@@ -88,6 +88,11 @@ TEST_CASE(AnimationLock, DryRunMode) {
     // Calculations are performed for metrics, but applied must be false
     TEST_ASSERT_NEAR(res.delay_reduced_ms, 105.0, 0.5);
     TEST_ASSERT(!res.applied);
+
+    // Dry-run mode must NOT accumulate session telemetry stats
+    const auto stats = engine.get_session_stats();
+    TEST_ASSERT_EQ(stats.total_actions_mitigated, 0);
+    TEST_ASSERT_NEAR(stats.cumulative_time_saved_ms, 0.0, 0.001);
 }
 
 TEST_CASE(AnimationLock, UntrackedFallbackToSmoothedRtt) {
