@@ -52,8 +52,7 @@ void SequenceTracker::record_request(
 std::optional<ActionRequestInfo> SequenceTracker::match_response(
     ActionId action_id,
     SequenceId sequence,
-    TimePoint timestamp,
-    double expected_rtt_ms
+    TimePoint timestamp
 ) {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -81,7 +80,7 @@ std::optional<ActionRequestInfo> SequenceTracker::match_response(
         }
     }
 
-    // 2. Secondary Strategy: Match pending request with matching action_id
+    // 2. Secondary Strategy: Match oldest pending request with matching action_id
     if (action_id != 0) {
         auto it = std::find_if(m_pending.begin(), m_pending.end(),
             [action_id](const ActionRequestInfo& req) {
@@ -89,49 +88,9 @@ std::optional<ActionRequestInfo> SequenceTracker::match_response(
             });
 
         if (it != m_pending.end()) {
-            // Plausibility check for repeated actions (2A):
-            // If expected_rtt_ms is provided and multiple requests share the same action_id,
-            // prune any older match whose elapsed duration is implausibly large compared to expected RTT.
-            if (expected_rtt_ms > 0.0) {
-                const double base_threshold_ms = (std::max)(
-                    2.0 * expected_rtt_ms,
-                    expected_rtt_ms + constants::MIN_OUTLIER_TOLERANCE_MS
-                );
-
-                while (it != m_pending.end()) {
-                    const double elapsed_ms = std::chrono::duration_cast<Milliseconds>(
-                        timestamp - it->timestamp
-                    ).count();
-
-                    const double cast_time_ms = it->is_cast
-                        ? (static_cast<double>(it->cast_duration_seconds) * constants::MS_PER_SECOND)
-                        : 0.0;
-
-                    if (elapsed_ms > (cast_time_ms + base_threshold_ms)) {
-                        auto next = std::find_if(std::next(it), m_pending.end(),
-                            [action_id](const ActionRequestInfo& req) {
-                                return req.action_id == action_id;
-                            });
-
-                        if (next != m_pending.end()) {
-                            // The older entry is stale; erase it and continue checking from next match
-                            it = m_pending.erase(it);
-                            it = std::find_if(it, m_pending.end(),
-                                [action_id](const ActionRequestInfo& req) {
-                                    return req.action_id == action_id;
-                                });
-                            continue;
-                        }
-                    }
-                    break;
-                }
-            }
-
-            if (it != m_pending.end()) {
-                ActionRequestInfo matched = *it;
-                m_pending.erase(it);
-                return matched;
-            }
+            ActionRequestInfo matched = *it;
+            m_pending.erase(it);
+            return matched;
         }
     }
 
