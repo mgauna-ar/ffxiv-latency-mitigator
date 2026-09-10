@@ -191,7 +191,8 @@ int main(int argc, char* argv[]) {
     mitigator::loader::ProcessFinder::enable_debug_privilege();
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
-    // Enable virtual terminal processing for ANSI color codes
+    // Enable virtual terminal processing for ANSI color codes and UTF-8 encoding
+    SetConsoleOutputCP(CP_UTF8);
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD dwMode = 0;
     if (GetConsoleMode(hOut, &dwMode)) {
@@ -208,8 +209,9 @@ int main(int argc, char* argv[]) {
 
     // Status callback
     ipc_server.set_status_callback([&](const mitigator::ipc::StatusPayload& s) {
-        ui.render_header(s.game_pid, s.hooks_installed, target_ping_ms, dry_run);
+        ui.set_session_info(s.game_pid, s.hooks_installed, target_ping_ms, dry_run);
         if (s.hooks_installed < mitigator::game::definitions::MIN_REQUIRED_PRIMARY_HOOKS) {
+            ui.render_header(s.game_pid, s.hooks_installed, target_ping_ms, dry_run);
             ui.log_status(
                 "Game update detected! Signature scan failed (" +
                 std::string(s.status_message) + ").",
@@ -218,7 +220,8 @@ int main(int argc, char* argv[]) {
             ui.log_status("Game memory is safe and untouched. Payload automatically self-unloaded.", false);
             ui.log_status("Update signatures in include/mitigator/game_definitions.hpp to support this patch.", false);
         } else {
-            ui.render_hotkey_bar(dry_run, verbose);
+            ui.set_dashboard_mode(true);
+            ui.render_dashboard(dry_run, verbose);
         }
     });
 
@@ -403,11 +406,26 @@ int main(int argc, char* argv[]) {
         ipc_server.set_target_ping(static_cast<float>(target_ping_ms));
         ipc_server.set_min_lock(static_cast<float>(min_lock_ms));
 
-        // Interactive hotkey input loop
+        // Interactive hotkey input loop with decoupled dashboard refresh
+        auto last_dashboard_render = std::chrono::steady_clock::now();
+        constexpr auto DASHBOARD_TICK_INTERVAL = std::chrono::milliseconds(250);
+        constexpr auto DASHBOARD_HEARTBEAT_INTERVAL = std::chrono::milliseconds(1000);
+
         while (g_keep_running.load()) {
             if (proc_handle && WaitForSingleObject(proc_handle.get(), 0) == WAIT_OBJECT_0) {
                 std::cout << "\n[!] Game process (PID " << proc->pid << ") terminated.\n";
                 break;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            const auto time_since_render = now - last_dashboard_render;
+
+            if (ui.is_dashboard_mode()) {
+                if ((ui.needs_redraw() && time_since_render >= DASHBOARD_TICK_INTERVAL) ||
+                    (time_since_render >= DASHBOARD_HEARTBEAT_INTERVAL)) {
+                    ui.render_dashboard(dry_run, verbose);
+                    last_dashboard_render = now;
+                }
             }
 
             if (_kbhit()) {
@@ -422,25 +440,41 @@ int main(int argc, char* argv[]) {
                     case 'D':
                         dry_run = !dry_run;
                         ipc_server.set_dry_run(dry_run);
-                        ui.log_status(std::string("Dry-Run toggled: ") + (dry_run ? "ENABLED" : "DISABLED"));
-                        ui.render_hotkey_bar(dry_run, verbose);
+                        if (ui.is_dashboard_mode()) {
+                            ui.render_dashboard(dry_run, verbose);
+                        } else {
+                            ui.log_status(std::string("Dry-Run toggled: ") + (dry_run ? "ENABLED" : "DISABLED"));
+                            ui.render_hotkey_bar(dry_run, verbose);
+                        }
                         break;
                     case 'l':
                     case 'L':
                         verbose = !verbose;
                         ipc_server.set_verbose(verbose);
-                        ui.log_status(std::string("Verbose logging: ") + (verbose ? "ENABLED" : "DISABLED"));
-                        ui.render_hotkey_bar(dry_run, verbose);
+                        if (ui.is_dashboard_mode()) {
+                            ui.render_dashboard(dry_run, verbose);
+                        } else {
+                            ui.log_status(std::string("Verbose logging: ") + (verbose ? "ENABLED" : "DISABLED"));
+                            ui.render_hotkey_bar(dry_run, verbose);
+                        }
                         break;
                     case 'c':
                     case 'C':
                         ui.reset_stats();
                         ipc_server.reset_stats();
-                        ui.log_status("Session statistics cleared.");
+                        if (ui.is_dashboard_mode()) {
+                            ui.render_dashboard(dry_run, verbose);
+                        } else {
+                            ui.log_status("Session statistics cleared.");
+                        }
                         break;
                     case 's':
                     case 'S':
-                        ui.render_stats_summary();
+                        if (ui.is_dashboard_mode()) {
+                            ui.render_dashboard(dry_run, verbose);
+                        } else {
+                            ui.render_stats_summary();
+                        }
                         break;
                     default:
                         break;
@@ -458,7 +492,7 @@ int main(int argc, char* argv[]) {
 
         ipc_server.stop();
         proc_handle.reset();
-        ui.render_stats_summary();
+        ui.render_final_report();
 
         if (!watch_mode || !g_keep_running.load()) {
             break;

@@ -2,46 +2,154 @@
 
 #include "mitigator/ipc_protocol.hpp"
 #include <string>
+#include <string_view>
 #include <mutex>
 #include <cstdint>
+#include <deque>
+#include <vector>
+#include <chrono>
 
 namespace mitigator::loader {
 
 /**
- * @brief Thread-safe terminal dashboard renderer.
+ * @brief Record representing an individual action telemetry event in the rolling buffer.
+ */
+struct ActionLogEntry {
+    uint64_t index{0};
+    uint32_t action_id{0};
+    uint32_t sequence{0};
+    float original_lock_ms{0.0f};
+    float adjusted_lock_ms{0.0f};
+    float delay_reduced_ms{0.0f};
+    float measured_rtt_ms{0.0f};
+    float smoothed_rtt_ms{0.0f};
+    float jitter_ms{0.0f};
+    bool clamped_floor{false};
+    bool dry_run{false};
+    bool applied{false};
+    bool cast_active{false};
+    bool spike_filtered{false};
+    bool cold_start_guard{false};
+    std::string timestamp_str; // HH:MM:SS
+};
+
+/**
+ * @brief Statistical summary of latency or delay reduction percentiles.
+ */
+struct LatencyDistribution {
+    float min_val{0.0f};
+    float median_val{0.0f};
+    float p95_val{0.0f};
+    float max_val{0.0f};
+};
+
+/**
+ * @brief Cumulative counters for safety guard and anomaly filter activations.
+ */
+struct GuardCounters {
+    uint64_t floor_clamps{0};
+    uint64_t spike_filtered{0};
+    uint64_t cold_start_guards{0};
+    uint64_t cast_locks_preserved{0};
+};
+
+/**
+ * @brief Thread-safe 100-column terminal dashboard and telemetry renderer.
  *
- * Displays real-time telemetry metrics, action mitigation logs, and
- * hotkey controls in the console window.
+ * Provides a split-screen in-place live dashboard (persistent top status pane,
+ * latency bar meters, guard counters, APM calculations, and a fixed lower
+ * action ring buffer) as well as post-session summary report generation.
  */
 class UiRenderer {
 public:
+    static constexpr size_t DASHBOARD_WIDTH = 100;
+    static constexpr size_t INNER_WIDTH = DASHBOARD_WIDTH - 2;
+    static constexpr size_t RING_BUFFER_CAPACITY = 12;
+
     UiRenderer();
+
+    /// Configures session metadata for dashboard rendering.
+    void set_session_info(uint32_t pid, uint32_t hook_count, double target_ping_ms, bool dry_run);
+
+    /// Enables or disables in-place split-screen dashboard mode.
+    void set_dashboard_mode(bool enabled);
+
+    /// Returns true if dashboard mode is currently enabled.
+    [[nodiscard]] bool is_dashboard_mode() const;
+
+    /// Checks if new telemetry has arrived since the last dashboard render.
+    [[nodiscard]] bool needs_redraw() const;
 
     /// Renders the startup header and game connection banner.
     void render_header(uint32_t pid, uint32_t hook_count, double target_ping_ms, bool dry_run);
 
-    /// Formats and prints an incoming action telemetry event.
+    /// Records an incoming action telemetry event into metrics and ring buffer.
+    /// In non-dashboard mode, also logs the line directly to stdout.
     void log_action(const ipc::TelemetryPayload& t, bool verbose);
 
     /// Prints a system status / notification message.
     void log_status(const std::string& message, bool is_error = false);
 
-    /// Updates and renders the bottom telemetry stats summary.
+    /// Renders the complete 100-column live split-screen dashboard in-place.
+    void render_dashboard(bool dry_run, bool verbose);
+
+    /// Updates and renders the telemetry stats summary card.
     void render_stats_summary();
 
     /// Renders available hotkeys.
     void render_hotkey_bar(bool dry_run, bool verbose);
 
-    /// Resets all accumulated session stats.
+    /// Prints a persistent ASCII session summary report card upon shutdown.
+    void render_final_report();
+
+    /// Resets all accumulated session stats, distributions, and ring buffer.
     void reset_stats();
 
+    // Inspection getters for unit testing and diagnostics
+    [[nodiscard]] uint64_t total_actions() const;
+    [[nodiscard]] uint64_t actions_mitigated() const;
+    [[nodiscard]] double cumulative_time_saved_ms() const;
+    [[nodiscard]] float last_smoothed_rtt() const;
+    [[nodiscard]] float last_jitter() const;
+    [[nodiscard]] LatencyDistribution rtt_distribution() const;
+    [[nodiscard]] LatencyDistribution delay_saved_distribution() const;
+    [[nodiscard]] GuardCounters guard_counters() const;
+    [[nodiscard]] double calculate_apm() const;
+    [[nodiscard]] size_t ring_buffer_size() const;
+    [[nodiscard]] std::chrono::seconds uptime() const;
+
+    // Static formatting and utility helpers
+    [[nodiscard]] static size_t visible_width(std::string_view s);
+    [[nodiscard]] static LatencyDistribution compute_distribution(const std::vector<float>& samples);
+    [[nodiscard]] static std::string make_bar(float value, float max_val, size_t bar_width, const char* bar_color);
+    [[nodiscard]] static std::string format_time_hhmmss(std::chrono::seconds total_secs);
+    [[nodiscard]] static std::string current_time_hhmmss();
+    [[nodiscard]] static std::string format_action_line(const ActionLogEntry& entry);
+
 private:
-    std::mutex m_render_mutex;
+    void record_action_internal(const ipc::TelemetryPayload& t);
+
+    mutable std::mutex m_render_mutex;
+
     uint64_t m_total_actions{0};
     uint64_t m_actions_mitigated{0};
     double m_cumulative_time_saved_ms{0.0};
     float m_last_smoothed_rtt{0.0f};
     float m_last_jitter{0.0f};
+
+    GuardCounters m_guards{};
+    std::vector<float> m_rtt_samples;
+    std::vector<float> m_delay_saved_samples;
+    std::deque<ActionLogEntry> m_action_ring_buffer;
+    std::deque<std::chrono::steady_clock::time_point> m_recent_action_times;
+
+    std::chrono::steady_clock::time_point m_session_start_time;
+    uint32_t m_pid{0};
+    uint32_t m_hook_count{0};
+    double m_target_ping_ms{15.0};
+    bool m_dry_run{false};
+    bool m_dashboard_mode{false};
+    bool m_dirty{true};
 };
 
 } // namespace mitigator::loader
