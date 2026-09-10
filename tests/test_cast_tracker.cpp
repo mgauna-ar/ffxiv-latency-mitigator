@@ -86,3 +86,54 @@ TEST_CASE(CastTracker, NegativeElapsedDoesNotEvaluateAsCasting) {
     TEST_ASSERT(!tracker.is_casting(t_before));
     TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t_before), 0.0f, 0.001f);
 }
+
+TEST_CASE(CastTracker, RapidConsecutiveCastsTransitionCleanly) {
+    mitigator::CastTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Cast 1: 2.0s spell
+    tracker.on_cast_begin(0x1001, 2.0f, t0);
+    TEST_ASSERT(tracker.is_casting(t0));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0x1001);
+
+    // Cast 1 finishes at 2.0s
+    const auto t1 = t0 + std::chrono::milliseconds(2000);
+    tracker.on_cast_end(t1);
+    TEST_ASSERT(!tracker.is_casting(t1));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0);
+
+    // Cast 2: begins 50ms later (e.g. chained spell)
+    const auto t2 = t1 + std::chrono::milliseconds(50);
+    tracker.on_cast_begin(0x1002, 1.5f, t2);
+    TEST_ASSERT(tracker.is_casting(t2));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0x1002);
+    TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t2), 1.5f, 0.01f);
+
+    // Mid-cast check for Cast 2
+    const auto t3 = t2 + std::chrono::milliseconds(500);
+    TEST_ASSERT(tracker.is_casting(t3));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0x1002);
+    TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t3), 1.0f, 0.01f);
+}
+
+TEST_CASE(CastTracker, InterruptedCastAllowsImmediateNewCast) {
+    mitigator::CastTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Cast 1: 3.0s spell begins
+    tracker.on_cast_begin(0x2001, 3.0f, t0);
+    TEST_ASSERT(tracker.is_casting(t0));
+
+    // Player moves / interrupted at 800ms
+    const auto t_int = t0 + std::chrono::milliseconds(800);
+    tracker.on_cast_interrupt(t_int);
+    TEST_ASSERT(!tracker.is_casting(t_int));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0);
+
+    // Immediately starts new instant action / cast at 850ms
+    const auto t_new = t_int + std::chrono::milliseconds(50);
+    tracker.on_cast_begin(0x2002, 1.0f, t_new);
+    TEST_ASSERT(tracker.is_casting(t_new));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0x2002);
+}
+

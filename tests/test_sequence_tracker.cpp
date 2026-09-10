@@ -171,3 +171,52 @@ TEST_CASE(SequenceTracker, ZeroSequenceAndZeroActionIdDoesNotMatch) {
     TEST_ASSERT_EQ(real_match->sequence, 10);
     TEST_ASSERT_EQ(tracker.pending_count(), 0);
 }
+
+TEST_CASE(SequenceTracker, SequenceWraparoundAtUint16Boundary) {
+    mitigator::SequenceTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Request 1: Dispatched at the very edge of uint16_t (65535 / 0xFFFF)
+    tracker.record_request(0x1001, 65535, t0);
+
+    // Request 2: Next dispatch rolls over past 65535 to 1 (0x0001)
+    tracker.record_request(0x1002, 1, t0 + std::chrono::milliseconds(50));
+    TEST_ASSERT_EQ(tracker.pending_count(), 2);
+
+    // Response 1 arrives for sequence 65535
+    auto m1 = tracker.match_response(0x1001, 65535, t0 + std::chrono::milliseconds(80));
+    TEST_ASSERT(m1.has_value());
+    TEST_ASSERT_EQ(m1->action_id, 0x1001);
+    TEST_ASSERT_EQ(m1->sequence, 65535);
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    // Response 2 arrives for sequence 1
+    auto m2 = tracker.match_response(0x1002, 1, t0 + std::chrono::milliseconds(120));
+    TEST_ASSERT(m2.has_value());
+    TEST_ASSERT_EQ(m2->action_id, 0x1002);
+    TEST_ASSERT_EQ(m2->sequence, 1);
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+}
+
+TEST_CASE(SequenceTracker, OutOfOrderAcrossWraparoundBoundary) {
+    mitigator::SequenceTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Requests dispatched across wraparound boundary
+    tracker.record_request(0x2001, 65535, t0);
+    tracker.record_request(0x2002, 1, t0 + std::chrono::milliseconds(20));
+
+    // Response for sequence 1 arrives BEFORE response for sequence 65535 (out-of-order)
+    auto m2 = tracker.match_response(0x2002, 1, t0 + std::chrono::milliseconds(60));
+    TEST_ASSERT(m2.has_value());
+    TEST_ASSERT_EQ(m2->action_id, 0x2002);
+    TEST_ASSERT_EQ(m2->sequence, 1);
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    // Response for sequence 65535 arrives later
+    auto m1 = tracker.match_response(0x2001, 65535, t0 + std::chrono::milliseconds(100));
+    TEST_ASSERT(m1.has_value());
+    TEST_ASSERT_EQ(m1->action_id, 0x2001);
+    TEST_ASSERT_EQ(m1->sequence, 65535);
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+}
