@@ -42,7 +42,20 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
     if (!matched_req.has_value()) {
         // Untracked server effect (party member, enemy, or zone-wide effect):
         // Safely pass through without modifying game memory to prevent lock corruption.
-        res.adjusted_lock_ms = original_lock_ms;
+        res.adjusted_lock_ms = std::isfinite(original_lock_ms) ? original_lock_ms : 0.0;
+        res.delay_reduced_ms = 0.0;
+        res.applied = false;
+        res.measured_rtt_ms = 0.0;
+        res.smoothed_rtt_ms = m_rtt_tracker.get_smoothed_rtt_ms();
+        return res;
+    }
+
+    if (!std::isfinite(original_lock_ms)) {
+        if (matched_req->is_cast) {
+            m_cast_tracker.on_cast_end(now);
+        }
+        res.cast_active = matched_req->is_cast || m_cast_tracker.is_casting(now, m_rtt_tracker.get_smoothed_rtt_ms());
+        res.adjusted_lock_ms = 0.0;
         res.delay_reduced_ms = 0.0;
         res.applied = false;
         res.measured_rtt_ms = 0.0;
@@ -92,18 +105,23 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
     } else if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
         measured_rtt = elapsed;
         effective_rtt = measured_rtt;
-        bool is_outlier = false;
+        OutlierDirection current_sample_dir = OutlierDirection::None;
 
         // Apply moving median spike filter to reject extreme latency anomalies
         if (samples_before >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER) {
             const double median_rtt = m_rtt_tracker.get_median_rtt_ms();
             const double jitter = m_rtt_tracker.get_jitter_ms();
-            const double outlier_threshold = median_rtt + std::max(
+            const double tolerance = std::max(
                 constants::MIN_OUTLIER_TOLERANCE_MS,
                 constants::JITTER_SPIKE_MULTIPLIER * jitter
             );
-            if (effective_rtt > outlier_threshold) {
-                is_outlier = true;
+            const double upper_threshold = median_rtt + tolerance;
+            const double lower_threshold = median_rtt - tolerance;
+
+            if (effective_rtt > upper_threshold) {
+                current_sample_dir = OutlierDirection::Up;
+            } else if (effective_rtt < lower_threshold) {
+                current_sample_dir = OutlierDirection::Down;
             }
         } else if (is_cold_start) {
             // Cold-start protection: prior to having median filtering samples,
@@ -112,37 +130,55 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
             const double cold_start_cap = (samples_before == 0)
                 ? std::max(200.0, baseline_rtt + cold_tolerance)
                 : (baseline_rtt + cold_tolerance);
+            const double cold_start_floor = baseline_rtt - cold_tolerance;
+
             if (effective_rtt > cold_start_cap) {
-                is_outlier = true;
+                current_sample_dir = OutlierDirection::Up;
+            } else if (effective_rtt < cold_start_floor) {
+                current_sample_dir = OutlierDirection::Down;
             }
         }
 
-        if (is_outlier) {
-            ++m_consecutive_outliers;
+        if (current_sample_dir != OutlierDirection::None) {
+            if (m_outlier_direction == current_sample_dir) {
+                ++m_consecutive_outliers;
+            } else {
+                m_outlier_direction = current_sample_dir;
+                m_consecutive_outliers = 1;
+            }
+
             if (m_consecutive_outliers >= constants::CONSECUTIVE_OUTLIER_RESEED_THRESHOLD) {
                 m_rtt_tracker.reset(effective_rtt);
                 res.route_shift_reseeded = true;
                 m_consecutive_outliers = 0;
+                m_outlier_direction = OutlierDirection::None;
             } else {
-                if (samples_before >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER) {
-                    effective_rtt = m_rtt_tracker.get_median_rtt_ms();
-                    res.spike_filtered = true;
-                } else {
-                    const double cold_tolerance = std::max(constants::MIN_OUTLIER_TOLERANCE_MS, baseline_rtt * 0.5);
-                    const double cold_start_cap = (samples_before == 0)
-                        ? std::max(200.0, baseline_rtt + cold_tolerance)
-                        : (baseline_rtt + cold_tolerance);
-                    effective_rtt = cold_start_cap;
-                    res.cold_start_guard = true;
+                if (current_sample_dir == OutlierDirection::Up) {
+                    if (samples_before >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER) {
+                        effective_rtt = m_rtt_tracker.get_median_rtt_ms();
+                        res.spike_filtered = true;
+                    } else {
+                        const double cold_tolerance = std::max(constants::MIN_OUTLIER_TOLERANCE_MS, baseline_rtt * 0.5);
+                        const double cold_start_cap = (samples_before == 0)
+                            ? std::max(200.0, baseline_rtt + cold_tolerance)
+                            : (baseline_rtt + cold_tolerance);
+                        effective_rtt = cold_start_cap;
+                        res.cold_start_guard = true;
+                    }
                 }
+                // Downward outlier: do NOT clamp effective_rtt upwards to median.
+                // Using measured_rtt is strictly anti-cheat safe because smaller latency reduction means longer animation lock.
             }
         } else {
             m_consecutive_outliers = 0;
+            m_outlier_direction = OutlierDirection::None;
         }
 
         // Ingest sample into tracker unless route shift reseed just reset it with effective_rtt
         if (!res.route_shift_reseeded) {
-            const double sample_to_ingest = is_outlier ? effective_rtt : measured_rtt;
+            const double sample_to_ingest = (current_sample_dir != OutlierDirection::None)
+                ? (samples_before >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER ? m_rtt_tracker.get_median_rtt_ms() : baseline_rtt)
+                : measured_rtt;
             m_rtt_tracker.add_sample(sample_to_ingest);
         }
     }
@@ -264,6 +300,7 @@ void AnimationLockMitigator::reset() {
     m_cumulative_time_saved_ms = 0.0;
     m_total_floor_clamps = 0;
     m_consecutive_outliers = 0;
+    m_outlier_direction = OutlierDirection::None;
 }
 
 } // namespace mitigator

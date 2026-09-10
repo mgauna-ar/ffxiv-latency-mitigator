@@ -72,16 +72,41 @@ std::optional<ActionRequestInfo> SequenceTracker::match_response(
     // Guard: Only match if either response sequence or request sequence is 0.
     // Prevents cross-sequence request theft when different actions/sequences are in flight.
     if (action_id != 0) {
-        auto it = std::find_if(m_pending.begin(), m_pending.end(),
-            [action_id, sequence](const ActionRequestInfo& req) {
-                const bool either_unsequenced = (sequence == 0 || req.sequence == 0);
-                return either_unsequenced && (req.action_id == action_id);
-            });
+        if (sequence == 0) {
+            // Unsequenced server response:
+            // First look for an exact unsequenced request (sequence == 0) to avoid stealing a pending sequenced request.
+            auto it = std::find_if(m_pending.begin(), m_pending.end(),
+                [action_id](const ActionRequestInfo& req) {
+                    return (req.sequence == 0) && (req.action_id == action_id);
+                });
 
-        if (it != m_pending.end()) {
-            ActionRequestInfo matched = *it;
-            m_pending.erase(it);
-            return matched;
+            // If no unsequenced request exists, fall back to matching the oldest pending sequenced request for this action.
+            if (it == m_pending.end()) {
+                it = std::find_if(m_pending.begin(), m_pending.end(),
+                    [action_id](const ActionRequestInfo& req) {
+                        return req.action_id == action_id;
+                    });
+            }
+
+            if (it != m_pending.end()) {
+                ActionRequestInfo matched = *it;
+                m_pending.erase(it);
+                return matched;
+            }
+        } else {
+            // Sequenced server response (Strategy 1 already verified no exact sequence match):
+            // Only match if the pending request is unsequenced (req.sequence == 0).
+            // Do NOT match if pending request has a different non-zero sequence (conflicting sequences).
+            auto it = std::find_if(m_pending.begin(), m_pending.end(),
+                [action_id](const ActionRequestInfo& req) {
+                    return (req.sequence == 0) && (req.action_id == action_id);
+                });
+
+            if (it != m_pending.end()) {
+                ActionRequestInfo matched = *it;
+                m_pending.erase(it);
+                return matched;
+            }
         }
     }
 

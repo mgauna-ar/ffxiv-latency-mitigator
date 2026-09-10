@@ -314,3 +314,71 @@ TEST_CASE(RollingRtt, DomainTypesPhase1Defaults) {
     TEST_ASSERT_EQ(mitigator::constants::CONSECUTIVE_OUTLIER_RESEED_THRESHOLD, 4);
 }
 
+TEST_CASE(RollingRtt, DownwardLatencyTransitionAdaptsMedianAndSmoothed) {
+    // Window size 10
+    mitigator::RollingRttTracker tracker(10, 200.0);
+    for (int i = 0; i < 10; ++i) {
+        tracker.add_sample(200.0);
+    }
+    TEST_ASSERT_EQ(tracker.sample_count(), 10);
+    TEST_ASSERT_NEAR(tracker.get_smoothed_rtt_ms(), 200.0, 0.001);
+    TEST_ASSERT_NEAR(tracker.get_median_rtt_ms(), 200.0, 0.001);
+
+    // Latency drops suddenly from 200ms to 40ms (e.g. routing restored)
+    // Ingest 10 samples of 40ms
+    for (int i = 1; i <= 10; ++i) {
+        tracker.add_sample(40.0);
+        TEST_ASSERT_EQ(tracker.sample_count(), 10 + static_cast<size_t>(i));
+    }
+
+    // After 10 samples of 40ms, all 10 slots in sliding window are 40ms
+    TEST_ASSERT_NEAR(tracker.get_median_rtt_ms(), 40.0, 0.001);
+    // EMA smoothed RTT has decayed heavily towards 40ms (from 200ms down to ~61.5ms with alpha=2/11)
+    TEST_ASSERT(tracker.get_smoothed_rtt_ms() < 65.0);
+    TEST_ASSERT(tracker.get_smoothed_rtt_ms() >= 40.0);
+
+    // After 5 more samples (15 total downward samples), smoothed RTT decays below 50.0ms
+    for (int i = 0; i < 5; ++i) {
+        tracker.add_sample(40.0);
+    }
+    TEST_ASSERT(tracker.get_smoothed_rtt_ms() < 50.0);
+    TEST_ASSERT(tracker.get_smoothed_rtt_ms() >= 40.0);
+}
+
+TEST_CASE(RollingRtt, ResetReseedsDownwardShift) {
+    mitigator::RollingRttTracker tracker(10, 200.0);
+    for (int i = 0; i < 10; ++i) {
+        tracker.add_sample(200.0);
+    }
+    TEST_ASSERT_NEAR(tracker.get_median_rtt_ms(), 200.0, 0.001);
+
+    // Immediate downward reseed to 40.0ms
+    tracker.reset(40.0);
+    TEST_ASSERT_EQ(tracker.sample_count(), 0);
+    TEST_ASSERT_NEAR(tracker.get_smoothed_rtt_ms(), 40.0, 0.001);
+    TEST_ASSERT_NEAR(tracker.get_median_rtt_ms(), 40.0, 0.001);
+    TEST_ASSERT_NEAR(tracker.get_jitter_ms(), 0.0, 0.001);
+    TEST_ASSERT(tracker.get_samples().empty());
+
+    // Next sample at 42ms adapts cleanly
+    tracker.add_sample(42.0);
+    TEST_ASSERT_EQ(tracker.sample_count(), 1);
+    TEST_ASSERT_NEAR(tracker.get_smoothed_rtt_ms(), 42.0, 0.001);
+    TEST_ASSERT_NEAR(tracker.get_median_rtt_ms(), 42.0, 0.001);
+}
+
+TEST_CASE(RollingRtt, NonFiniteAddSampleRejected) {
+    mitigator::RollingRttTracker tracker(10, 50.0);
+
+    tracker.add_sample(std::numeric_limits<double>::quiet_NaN());
+    tracker.add_sample(std::numeric_limits<double>::infinity());
+    tracker.add_sample(-std::numeric_limits<double>::infinity());
+
+    // None of these invalid samples should be accepted
+    TEST_ASSERT_EQ(tracker.sample_count(), 0);
+    TEST_ASSERT_NEAR(tracker.get_smoothed_rtt_ms(), 50.0, 0.001);
+    TEST_ASSERT_NEAR(tracker.get_median_rtt_ms(), 50.0, 0.001);
+    TEST_ASSERT_NEAR(tracker.get_jitter_ms(), 0.0, 0.001);
+}
+
+

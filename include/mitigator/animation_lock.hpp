@@ -81,9 +81,18 @@ public:
     [[nodiscard]] const RollingRttTracker& rtt_tracker() const { return m_rtt_tracker; }
     [[nodiscard]] const SequenceTracker& sequence_tracker() const { return m_seq_tracker; }
     [[nodiscard]] const CastTracker& cast_tracker() const { return m_cast_tracker; }
+    enum class OutlierDirection { None, Up, Down };
+
+    /// Returns consecutive outlier sample count in the current outlier direction.
     [[nodiscard]] size_t consecutive_outliers() const {
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_consecutive_outliers;
+    }
+
+    /// Returns the current active outlier direction.
+    [[nodiscard]] OutlierDirection outlier_direction() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_outlier_direction;
     }
 
 private:
@@ -94,6 +103,7 @@ private:
     CastTracker m_cast_tracker;
 
     // Outlier shift detection
+    OutlierDirection m_outlier_direction{OutlierDirection::None};
     size_t m_consecutive_outliers{0};
 
     // Session telemetry counters

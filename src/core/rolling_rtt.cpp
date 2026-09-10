@@ -25,8 +25,8 @@ RollingRttTracker::RollingRttTracker(size_t window_size, double initial_rtt_ms)
       m_smoothed_rtt(sanitize_initial_rtt(initial_rtt_ms)) {}
 
 void RollingRttTracker::add_sample(double rtt_ms) {
-    // Sanity filter: Ignore negative or physically impossible values
-    if (rtt_ms < constants::MIN_PLAUSIBLE_RTT_MS || rtt_ms > constants::MAX_PLAUSIBLE_RTT_MS) {
+    // Sanity filter: Ignore non-finite, negative, or physically impossible values
+    if (!std::isfinite(rtt_ms) || rtt_ms < constants::MIN_PLAUSIBLE_RTT_MS || rtt_ms > constants::MAX_PLAUSIBLE_RTT_MS) {
         return;
     }
 

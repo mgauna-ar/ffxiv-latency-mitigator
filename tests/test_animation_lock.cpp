@@ -3,6 +3,7 @@
 #include <thread>
 #include <atomic>
 #include <vector>
+#include <limits>
 
 TEST_CASE(AnimationLock, StandardPingMitigation) {
     mitigator::MitigationConfig cfg{};
@@ -734,6 +735,399 @@ TEST_CASE(AnimationLock, QueuedCastPreservesLockAndReportsQueuedTelemetry) {
     TEST_ASSERT(!res.applied);
     TEST_ASSERT_NEAR(res.adjusted_lock_ms, 100.0, 0.001);
 }
+
+TEST_CASE(AnimationLock, SustainedRouteShiftUpwardsJumpAndDownwardsDrop) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Prime tracker with stable 40ms baseline (5 samples)
+    for (int i = 1; i <= 5; ++i) {
+        engine.record_action_request(0x8000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x8000 + i, i, 600.0, t0 + std::chrono::milliseconds(40));
+    }
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_median_rtt_ms(), 40.0, 1.0);
+
+    // 2. Sudden upward route shift to 250ms (e.g. cross-region duty)
+    // First 3 samples are spike filtered
+    for (int i = 1; i <= 3; ++i) {
+        const auto t_req = t0 + std::chrono::milliseconds(i * 1000);
+        engine.record_action_request(0x8010 + i, 10 + i, t_req);
+        const auto res = engine.calculate_mitigation(0x8010 + i, 10 + i, 600.0, t_req + std::chrono::milliseconds(250));
+        TEST_ASSERT(res.spike_filtered);
+        TEST_ASSERT(!res.route_shift_reseeded);
+        TEST_ASSERT_EQ(engine.consecutive_outliers(), static_cast<size_t>(i));
+    }
+
+    // 4th sample triggers upward route reseed to 250ms
+    const auto t_shift_up = t0 + std::chrono::milliseconds(4000);
+    engine.record_action_request(0x8014, 14, t_shift_up);
+    const auto res_reseed = engine.calculate_mitigation(0x8014, 14, 600.0, t_shift_up + std::chrono::milliseconds(250));
+    TEST_ASSERT(res_reseed.route_shift_reseeded);
+    TEST_ASSERT(!res_reseed.spike_filtered);
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_smoothed_rtt_ms(), 250.0, 1.0);
+
+    // 5th sample at 250ms adapts cleanly
+    const auto t_subsequent = t0 + std::chrono::milliseconds(5000);
+    engine.record_action_request(0x8015, 15, t_subsequent);
+    const auto res_high = engine.calculate_mitigation(0x8015, 15, 600.0, t_subsequent + std::chrono::milliseconds(250));
+    TEST_ASSERT(!res_high.route_shift_reseeded);
+    TEST_ASSERT(!res_high.spike_filtered);
+    TEST_ASSERT_NEAR(res_high.delay_reduced_ms, 235.0, 2.0); // 250 - 15 = 235ms
+
+    // 3. Sudden downward shift back to 40ms (e.g. returning from duty or VPN fixed)
+    // Sample 1 at 40ms:
+    const auto t_shift_down = t0 + std::chrono::milliseconds(6000);
+    engine.record_action_request(0x8020, 20, t_shift_down);
+    const auto res_down1 = engine.calculate_mitigation(0x8020, 20, 600.0, t_shift_down + std::chrono::milliseconds(40));
+
+    // Crucial anti-cheat invariant: A downward latency drop must NOT be treated as an upward outlier,
+    // and must immediately reduce lock based on the LOWER 40ms latency (40 - 15 = 25ms),
+    // NEVER applying the old 250ms baseline (which would over-reduce by 235ms)!
+    TEST_ASSERT(!res_down1.spike_filtered);
+    TEST_ASSERT(!res_down1.route_shift_reseeded);
+    TEST_ASSERT(res_down1.applied);
+    TEST_ASSERT_NEAR(res_down1.measured_rtt_ms, 40.0, 0.5);
+    TEST_ASSERT_NEAR(res_down1.delay_reduced_ms, 25.0, 1.0);
+    TEST_ASSERT_NEAR(res_down1.adjusted_lock_ms, 575.0, 1.0);
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 1);
+    TEST_ASSERT(engine.outlier_direction() == mitigator::AnimationLockMitigator::OutlierDirection::Down);
+
+    // 4. Samples 2 and 3 at 40ms continue accumulating consecutive downward outliers
+    for (int i = 1; i <= 2; ++i) {
+        const auto t_req = t0 + std::chrono::milliseconds(7000 + i * 500);
+        engine.record_action_request(0x8030 + i, 30 + i, t_req);
+        const auto res_down = engine.calculate_mitigation(0x8030 + i, 30 + i, 600.0, t_req + std::chrono::milliseconds(40));
+        TEST_ASSERT(!res_down.spike_filtered);
+        TEST_ASSERT(!res_down.route_shift_reseeded);
+        TEST_ASSERT(res_down.applied);
+        TEST_ASSERT_NEAR(res_down.delay_reduced_ms, 25.0, 1.0);
+        TEST_ASSERT_EQ(engine.consecutive_outliers(), static_cast<size_t>(1 + i));
+    }
+
+    // 5. Sample 4 at 40ms (4th consecutive downward outlier) triggers downward route reseed to 40ms!
+    const auto t_shift_down4 = t0 + std::chrono::milliseconds(8500);
+    engine.record_action_request(0x8033, 33, t_shift_down4);
+    const auto res_down4 = engine.calculate_mitigation(0x8033, 33, 600.0, t_shift_down4 + std::chrono::milliseconds(40));
+    TEST_ASSERT(res_down4.route_shift_reseeded);
+    TEST_ASSERT(!res_down4.spike_filtered);
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 0);
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_smoothed_rtt_ms(), 40.0, 1.0);
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_median_rtt_ms(), 40.0, 1.0);
+
+    // 6. Sample 5 at 40ms: adapts cleanly post-reseed
+    const auto t_subsequent_down = t0 + std::chrono::milliseconds(9000);
+    engine.record_action_request(0x8034, 34, t_subsequent_down);
+    const auto res_down5 = engine.calculate_mitigation(0x8034, 34, 600.0, t_subsequent_down + std::chrono::milliseconds(40));
+    TEST_ASSERT(!res_down5.route_shift_reseeded);
+    TEST_ASSERT(!res_down5.spike_filtered);
+    TEST_ASSERT_NEAR(res_down5.delay_reduced_ms, 25.0, 1.0);
+
+    // 7. Crucial anti-cheat verification: A queued action buffered right after downward reseed
+    // MUST use the newly reseeded 40ms baseline (~25ms reduction), NEVER the old 250ms baseline (~235ms reduction)!
+    const auto t_queued_after = t_subsequent_down + std::chrono::milliseconds(500);
+    engine.record_action_request(0x8035, 35, t_queued_after, false /* is_cast */, 0.0f, true /* is_queued */);
+    const auto res_queued_after = engine.calculate_mitigation(0x8035, 35, 600.0, t_queued_after + std::chrono::milliseconds(300));
+    TEST_ASSERT(res_queued_after.queued_action);
+    TEST_ASSERT(res_queued_after.applied);
+    TEST_ASSERT_NEAR(res_queued_after.delay_reduced_ms, 25.0, 1.5);
+    TEST_ASSERT_NEAR(res_queued_after.adjusted_lock_ms, 575.0, 1.5);
+}
+
+TEST_CASE(AnimationLock, TransientDownwardSpikeDoesNotTriggerReseed) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Prime tracker with stable 200ms baseline (5 samples)
+    for (int i = 1; i <= 5; ++i) {
+        engine.record_action_request(0x9000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x9000 + i, i, 600.0, t0 + std::chrono::milliseconds(200));
+    }
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_median_rtt_ms(), 200.0, 1.0);
+
+    // 2. Ingest 2 downward spikes (40ms) - temporary fast packet or ACK bunching
+    for (int i = 1; i <= 2; ++i) {
+        const auto t_fast = t0 + std::chrono::milliseconds(i * 1000);
+        engine.record_action_request(0x9010 + i, 10 + i, t_fast);
+        const auto res = engine.calculate_mitigation(0x9010 + i, 10 + i, 600.0, t_fast + std::chrono::milliseconds(40));
+        TEST_ASSERT(!res.spike_filtered);
+        TEST_ASSERT(!res.route_shift_reseeded);
+        TEST_ASSERT_EQ(engine.consecutive_outliers(), static_cast<size_t>(i));
+        // Must reduce lock safely based on 40ms
+        TEST_ASSERT_NEAR(res.delay_reduced_ms, 25.0, 1.0);
+    }
+
+    // 3. Normal 200ms sample arrives -> consecutive outliers must reset to 0
+    const auto t_normal = t0 + std::chrono::milliseconds(3000);
+    engine.record_action_request(0x9020, 20, t_normal);
+    const auto res_normal = engine.calculate_mitigation(0x9020, 20, 600.0, t_normal + std::chrono::milliseconds(200));
+    TEST_ASSERT(!res_normal.spike_filtered);
+    TEST_ASSERT(!res_normal.route_shift_reseeded);
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 0);
+    TEST_ASSERT_NEAR(res_normal.delay_reduced_ms, 185.0, 2.0); // 200 - 15 = 185ms
+
+    // 4. One more downward spike occurs -> counter starts over at 1 (not 3)
+    const auto t_fast3 = t0 + std::chrono::milliseconds(4000);
+    engine.record_action_request(0x9021, 21, t_fast3);
+    const auto res_fast3 = engine.calculate_mitigation(0x9021, 21, 600.0, t_fast3 + std::chrono::milliseconds(40));
+    TEST_ASSERT(!res_fast3.route_shift_reseeded);
+    TEST_ASSERT_EQ(engine.consecutive_outliers(), 1);
+    TEST_ASSERT(engine.outlier_direction() == mitigator::AnimationLockMitigator::OutlierDirection::Down);
+}
+
+TEST_CASE(AnimationLock, NonFiniteOriginalLockInputsHandledSafely) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.min_animation_lock_ms = 25.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Prime with 1 sample
+    engine.record_action_request(0x1000, 1, t0);
+    (void)engine.calculate_mitigation(0x1000, 1, 600.0, t0 + std::chrono::milliseconds(40));
+
+    // Case 1: NaN on matched action
+    engine.record_action_request(0x1001, 2, t0 + std::chrono::milliseconds(100));
+    const auto res_nan = engine.calculate_mitigation(
+        0x1001, 2, std::numeric_limits<double>::quiet_NaN(), t0 + std::chrono::milliseconds(140)
+    );
+    TEST_ASSERT(!res_nan.applied);
+    TEST_ASSERT_NEAR(res_nan.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(std::isfinite(res_nan.adjusted_lock_ms));
+    TEST_ASSERT_NEAR(res_nan.adjusted_lock_ms, 0.0, 0.001);
+
+    // Case 2: +Infinity on matched action
+    engine.record_action_request(0x1002, 3, t0 + std::chrono::milliseconds(200));
+    const auto res_pinf = engine.calculate_mitigation(
+        0x1002, 3, std::numeric_limits<double>::infinity(), t0 + std::chrono::milliseconds(240)
+    );
+    TEST_ASSERT(!res_pinf.applied);
+    TEST_ASSERT_NEAR(res_pinf.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(std::isfinite(res_pinf.adjusted_lock_ms));
+    TEST_ASSERT_NEAR(res_pinf.adjusted_lock_ms, 0.0, 0.001);
+
+    // Case 3: -Infinity on matched action
+    engine.record_action_request(0x1003, 4, t0 + std::chrono::milliseconds(300));
+    const auto res_ninf = engine.calculate_mitigation(
+        0x1003, 4, -std::numeric_limits<double>::infinity(), t0 + std::chrono::milliseconds(340)
+    );
+    TEST_ASSERT(!res_ninf.applied);
+    TEST_ASSERT_NEAR(res_ninf.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(std::isfinite(res_ninf.adjusted_lock_ms));
+    TEST_ASSERT_NEAR(res_ninf.adjusted_lock_ms, 0.0, 0.001);
+
+    // Case 4: NaN on unmatched action
+    const auto res_unmatched_nan = engine.calculate_mitigation(
+        0x9999, 999, std::numeric_limits<double>::quiet_NaN(), t0 + std::chrono::milliseconds(400)
+    );
+    TEST_ASSERT(!res_unmatched_nan.applied);
+    TEST_ASSERT_NEAR(res_unmatched_nan.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(std::isfinite(res_unmatched_nan.adjusted_lock_ms));
+    TEST_ASSERT_NEAR(res_unmatched_nan.adjusted_lock_ms, 0.0, 0.001);
+
+    // Case 5: +Infinity on unmatched action
+    const auto res_unmatched_pinf = engine.calculate_mitigation(
+        0x9998, 998, std::numeric_limits<double>::infinity(), t0 + std::chrono::milliseconds(450)
+    );
+    TEST_ASSERT(!res_unmatched_pinf.applied);
+    TEST_ASSERT_NEAR(res_unmatched_pinf.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(std::isfinite(res_unmatched_pinf.adjusted_lock_ms));
+    TEST_ASSERT_NEAR(res_unmatched_pinf.adjusted_lock_ms, 0.0, 0.001);
+
+    // Case 6: -Infinity on unmatched action
+    const auto res_unmatched_ninf = engine.calculate_mitigation(
+        0x9997, 997, -std::numeric_limits<double>::infinity(), t0 + std::chrono::milliseconds(500)
+    );
+    TEST_ASSERT(!res_unmatched_ninf.applied);
+    TEST_ASSERT_NEAR(res_unmatched_ninf.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(std::isfinite(res_unmatched_ninf.adjusted_lock_ms));
+    TEST_ASSERT_NEAR(res_unmatched_ninf.adjusted_lock_ms, 0.0, 0.001);
+
+    // Case 7: NaN on active cast action - verifies cast ends cleanly
+    engine.record_cast_begin(0x2001, 2.0f, t0 + std::chrono::milliseconds(600));
+    engine.record_action_request(0x2001, 50, t0 + std::chrono::milliseconds(600), true /* is_cast */, 2.0f);
+    TEST_ASSERT(engine.is_casting(t0 + std::chrono::milliseconds(700)));
+
+    const auto res_cast_nan = engine.calculate_mitigation(
+        0x2001, 50, std::numeric_limits<double>::quiet_NaN(), t0 + std::chrono::milliseconds(2650)
+    );
+    TEST_ASSERT(!res_cast_nan.applied);
+    TEST_ASSERT_NEAR(res_cast_nan.adjusted_lock_ms, 0.0, 0.001);
+    // Cast state must be cleared after receiving the cast effect
+    TEST_ASSERT(!engine.is_casting(t0 + std::chrono::milliseconds(2700)));
+
+    // Telemetry stats must reflect only the single priming action
+    const auto stats = engine.get_session_stats();
+    TEST_ASSERT_EQ(stats.total_actions_mitigated, 1);
+}
+
+TEST_CASE(AnimationLock, ExtremeOriginalLockInputsHandledSafely) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.min_animation_lock_ms = 25.0; // 25ms floor
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Negative original lock (-100.0ms)
+    engine.record_action_request(0x2001, 1, t0);
+    const auto res_neg = engine.calculate_mitigation(0x2001, 1, -100.0, t0 + std::chrono::milliseconds(40));
+    TEST_ASSERT(!res_neg.applied);
+    TEST_ASSERT_NEAR(res_neg.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(res_neg.clamped_by_floor);
+    TEST_ASSERT_NEAR(res_neg.adjusted_lock_ms, 25.0, 0.001);
+
+    // 2. Zero original lock (0.0ms)
+    const auto t1 = t0 + std::chrono::milliseconds(500);
+    engine.record_action_request(0x2002, 2, t1);
+    const auto res_zero = engine.calculate_mitigation(0x2002, 2, 0.0, t1 + std::chrono::milliseconds(40));
+    TEST_ASSERT(!res_zero.applied);
+    TEST_ASSERT_NEAR(res_zero.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(res_zero.clamped_by_floor);
+    TEST_ASSERT_NEAR(res_zero.adjusted_lock_ms, 25.0, 0.001);
+
+    // 3. Sub-minimum original lock (10.0ms < 25.0ms floor)
+    const auto t2 = t1 + std::chrono::milliseconds(500);
+    engine.record_action_request(0x2003, 3, t2);
+    const auto res_sub = engine.calculate_mitigation(0x2003, 3, 10.0, t2 + std::chrono::milliseconds(40));
+    TEST_ASSERT(!res_sub.applied);
+    TEST_ASSERT_NEAR(res_sub.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(res_sub.clamped_by_floor);
+    TEST_ASSERT_NEAR(res_sub.adjusted_lock_ms, 25.0, 0.001);
+
+    // 4. Exact minimum original lock (25.0ms == floor)
+    const auto t3 = t2 + std::chrono::milliseconds(500);
+    engine.record_action_request(0x2004, 4, t3);
+    const auto res_exact = engine.calculate_mitigation(0x2004, 4, 25.0, t3 + std::chrono::milliseconds(40));
+    TEST_ASSERT(!res_exact.applied);
+    TEST_ASSERT_NEAR(res_exact.delay_reduced_ms, 0.0, 0.001);
+    TEST_ASSERT(res_exact.clamped_by_floor);
+    TEST_ASSERT_NEAR(res_exact.adjusted_lock_ms, 25.0, 0.001);
+
+    // 5. Barely above minimum (30.0ms > 25.0ms floor)
+    // 40ms RTT - 15ms target = 25ms reduction desired. 30 - 25 = 5ms -> clamped to 25.0ms floor.
+    // Time saved = 30.0 - 25.0 = 5.0ms!
+    const auto t4 = t3 + std::chrono::milliseconds(500);
+    engine.record_action_request(0x2005, 5, t4);
+    const auto res_above = engine.calculate_mitigation(0x2005, 5, 30.0, t4 + std::chrono::milliseconds(40));
+    TEST_ASSERT(res_above.applied);
+    TEST_ASSERT_NEAR(res_above.delay_reduced_ms, 5.0, 0.001);
+    TEST_ASSERT(res_above.clamped_by_floor);
+    TEST_ASSERT_NEAR(res_above.adjusted_lock_ms, 25.0, 0.001);
+
+    // Verify session telemetry: exactly 1 action was mitigated (the 30ms one)
+    const auto stats = engine.get_session_stats();
+    TEST_ASSERT_EQ(stats.total_actions_mitigated, 1);
+    TEST_ASSERT_NEAR(stats.cumulative_time_saved_ms, 5.0, 0.001);
+}
+
+TEST_CASE(AnimationLock, QueuedActionDispatchedDuringActiveCastAndMitigatedAfterCastCompletes) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Prime tracker with stable 40ms baseline
+    for (int i = 1; i <= 5; ++i) {
+        engine.record_action_request(0x1000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x1000 + i, i, 600.0, t0 + std::chrono::milliseconds(40));
+    }
+
+    // 2. Start hard-casting 2.5s spell (e.g. Glare III)
+    const auto t_cast_start = t0 + std::chrono::milliseconds(1000);
+    engine.record_cast_begin(0x2001, 2.5f, t_cast_start);
+    engine.record_action_request(0x2001, 10, t_cast_start, true /* is_cast */, 2.5f);
+
+    // 3. At 2.1s into the cast, player buffers next instant action in client queue (queued action)
+    const auto t_queued = t_cast_start + std::chrono::milliseconds(2100);
+    engine.record_action_request(0x2002, 11, t_queued, false /* is_cast */, 0.0f, true /* is_queued */);
+
+    // 4. Premature server effect for the queued action arrives while cast is still active
+    const auto t_premature = t_cast_start + std::chrono::milliseconds(2300);
+    const auto res_premature = engine.calculate_mitigation(0x2002, 11, 600.0, t_premature);
+    // Lock MUST be preserved because hard-cast is actively in progress
+    TEST_ASSERT(res_premature.cast_active);
+    TEST_ASSERT(res_premature.queued_action);
+    TEST_ASSERT(!res_premature.applied);
+    TEST_ASSERT_NEAR(res_premature.adjusted_lock_ms, 600.0, 0.001);
+
+    // 5. Cast completes at 2.55s (2.5s + 50ms latency)
+    const auto t_cast_done = t_cast_start + std::chrono::milliseconds(2550);
+    const auto res_cast = engine.calculate_mitigation(0x2001, 10, 100.0, t_cast_done);
+    TEST_ASSERT(res_cast.cast_active);
+    TEST_ASSERT(!res_cast.applied);
+
+    // 6. Now player queues another instant action right as GCD rolls over
+    const auto t_queued2 = t_cast_done + std::chrono::milliseconds(10);
+    engine.record_action_request(0x2003, 12, t_queued2, false /* is_cast */, 0.0f, true /* is_queued */);
+
+    // 7. Response for this queued action arrives 400ms later (400ms queue dwell time)
+    const auto t_recv2 = t_queued2 + std::chrono::milliseconds(400);
+    const auto res_queued2 = engine.calculate_mitigation(0x2003, 12, 600.0, t_recv2);
+
+    // Cast is no longer active, so queued action is mitigated using baseline RTT (40ms - 15ms = 25ms)
+    TEST_ASSERT(!res_queued2.cast_active);
+    TEST_ASSERT(res_queued2.queued_action);
+    TEST_ASSERT(res_queued2.applied);
+    TEST_ASSERT_NEAR(res_queued2.delay_reduced_ms, 25.0, 1.0);
+    TEST_ASSERT_NEAR(res_queued2.adjusted_lock_ms, 575.0, 1.0);
+
+    // 400ms dwell time must NOT have been ingested into RTT tracker
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_smoothed_rtt_ms(), 40.0, 1.0);
+}
+
+TEST_CASE(AnimationLock, RapidSuccessionQueuedActionsEdgeCase) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Prime tracker with stable 40ms baseline
+    for (int i = 1; i <= 5; ++i) {
+        engine.record_action_request(0x4000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x4000 + i, i, 600.0, t0 + std::chrono::milliseconds(40));
+    }
+    const size_t baseline_samples = engine.rtt_tracker().sample_count();
+
+    // 2. Dispatch 3 queued actions in rapid succession (e.g. GCD + double oGCD weave)
+    const auto t1 = t0 + std::chrono::milliseconds(1000);
+    engine.record_action_request(0x5001, 101, t1, false, 0.0f, true /* is_queued */);
+    engine.record_action_request(0x5002, 102, t1 + std::chrono::milliseconds(15), false, 0.0f, true /* is_queued */);
+    engine.record_action_request(0x5003, 103, t1 + std::chrono::milliseconds(30), false, 0.0f, true /* is_queued */);
+
+    // 3. Responses arrive with large queue dwell times (350ms, 380ms, 420ms)
+    const auto res1 = engine.calculate_mitigation(0x5001, 101, 600.0, t1 + std::chrono::milliseconds(350));
+    const auto res2 = engine.calculate_mitigation(0x5002, 102, 600.0, t1 + std::chrono::milliseconds(380));
+    const auto res3 = engine.calculate_mitigation(0x5003, 103, 600.0, t1 + std::chrono::milliseconds(420));
+
+    // Each must apply mitigation via baseline (~25ms saved)
+    TEST_ASSERT(res1.queued_action && res1.applied);
+    TEST_ASSERT_NEAR(res1.delay_reduced_ms, 25.0, 1.0);
+
+    TEST_ASSERT(res2.queued_action && res2.applied);
+    TEST_ASSERT_NEAR(res2.delay_reduced_ms, 25.0, 1.0);
+
+    TEST_ASSERT(res3.queued_action && res3.applied);
+    TEST_ASSERT_NEAR(res3.delay_reduced_ms, 25.0, 1.0);
+
+    // RTT tracker sample count must NOT have increased (queued dwell times not ingested)
+    TEST_ASSERT_EQ(engine.rtt_tracker().sample_count(), baseline_samples);
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_smoothed_rtt_ms(), 40.0, 1.0);
+    TEST_ASSERT(engine.rtt_tracker().get_jitter_ms() < 2.0);
+
+    // Session stats record all 3 mitigations: 5 priming + 3 queued = 8 total
+    const auto stats = engine.get_session_stats();
+    TEST_ASSERT_EQ(stats.total_actions_mitigated, 8);
+}
+
 
 
 

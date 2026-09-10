@@ -137,3 +137,64 @@ TEST_CASE(CastTracker, InterruptedCastAllowsImmediateNewCast) {
     TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0x2002);
 }
 
+TEST_CASE(CastTracker, ZeroAndNegativeDurationCastDoesNotEvaluateAsCasting) {
+    mitigator::CastTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 0.0s cast (instant action erroneously passed to cast tracker)
+    tracker.on_cast_begin(0x3001, 0.0f, t0);
+    TEST_ASSERT(!tracker.is_casting(t0));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0);
+    TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t0), 0.0f, 0.001f);
+
+    // Negative cast duration
+    tracker.on_cast_begin(0x3002, -2.5f, t0);
+    TEST_ASSERT(!tracker.is_casting(t0));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0);
+    TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t0), 0.0f, 0.001f);
+
+    // Non-finite cast duration (NaN)
+    tracker.on_cast_begin(0x3003, std::numeric_limits<float>::quiet_NaN(), t0);
+    TEST_ASSERT(!tracker.is_casting(t0));
+    TEST_ASSERT_EQ(tracker.current_cast_action_id(), 0);
+    TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t0), 0.0f, 0.001f);
+}
+
+TEST_CASE(CastTracker, DynamicGraceWindowBoundaryConditions) {
+    mitigator::CastTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 2.0s cast
+    tracker.on_cast_begin(0x4001, 2.0f, t0);
+
+    // Base grace window without RTT: 100ms -> expires at 2100ms
+    const auto t_before_base = t0 + std::chrono::milliseconds(2090);
+    const auto t_after_base = t0 + std::chrono::milliseconds(2110);
+    TEST_ASSERT(tracker.is_casting(t_before_base, 0.0));
+    TEST_ASSERT(!tracker.is_casting(t_after_base, 0.0));
+
+    // Dynamic grace window with 200ms RTT: max(0.100, 200/2000 + 0.050) = 0.150s (150ms) -> expires at 2150ms
+    const auto t_before_dyn = t0 + std::chrono::milliseconds(2140);
+    const auto t_after_dyn = t0 + std::chrono::milliseconds(2160);
+    TEST_ASSERT(tracker.is_casting(t_before_dyn, 200.0));
+    TEST_ASSERT(!tracker.is_casting(t_after_dyn, 200.0));
+}
+
+TEST_CASE(CastTracker, ExtremeCastDurationClampedToAbsoluteMax) {
+    mitigator::CastTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Corrupted 999.0s cast duration from memory
+    tracker.on_cast_begin(0x4002, 999.0f, t0);
+    TEST_ASSERT(tracker.is_casting(t0));
+    // Must be clamped to ABSOLUTE_MAX_CAST_DURATION_SECONDS (30.0s)
+    TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t0), mitigator::constants::ABSOLUTE_MAX_CAST_DURATION_SECONDS, 0.001f);
+
+    // After 30s + grace window, expires cleanly
+    const auto t_after_max = t0 + std::chrono::seconds(31);
+    TEST_ASSERT(!tracker.is_casting(t_after_max));
+    TEST_ASSERT_NEAR(tracker.remaining_cast_time_seconds(t_after_max), 0.0f, 0.001f);
+}
+
+
+
