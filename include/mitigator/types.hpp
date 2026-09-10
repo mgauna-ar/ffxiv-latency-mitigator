@@ -38,8 +38,6 @@ namespace constants {
 
     /// Default timeout for pruning stale action requests
     constexpr auto DEFAULT_STALE_TIMEOUT = std::chrono::milliseconds(5000);
-    /// Maximum age for generic 0-sequence fallback matches
-    constexpr auto GENERIC_FALLBACK_MAX_ELAPSED = std::chrono::milliseconds(1500);
 
     /// Absolute hard anti-cheat safety limit: never allow setting animation lock floor below this value
     constexpr double ABSOLUTE_MIN_ANIMATION_LOCK_FLOOR_MS = 20.0;

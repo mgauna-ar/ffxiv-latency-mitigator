@@ -149,3 +149,25 @@ TEST_CASE(SequenceTracker, ActionIdMismatchWithZeroSequenceDoesNotMatch) {
     TEST_ASSERT(!m.has_value());
     TEST_ASSERT_EQ(tracker.pending_count(), 2);
 }
+
+TEST_CASE(SequenceTracker, ZeroSequenceAndZeroActionIdDoesNotMatch) {
+    mitigator::SequenceTracker tracker;
+    const auto now = std::chrono::steady_clock::now();
+
+    // Client records single pending request
+    tracker.record_request(0x1000, 10, now);
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    // Generic effect arrives with both sequence == 0 and action_id == 0
+    // Must NOT match or consume the legitimate pending action
+    auto m = tracker.match_response(0, 0, now + std::chrono::milliseconds(50));
+    TEST_ASSERT(!m.has_value());
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    // Subsequent arrival of the real action response should still match successfully
+    auto real_match = tracker.match_response(0x1000, 10, now + std::chrono::milliseconds(70));
+    TEST_ASSERT(real_match.has_value());
+    TEST_ASSERT_EQ(real_match->action_id, 0x1000);
+    TEST_ASSERT_EQ(real_match->sequence, 10);
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+}
