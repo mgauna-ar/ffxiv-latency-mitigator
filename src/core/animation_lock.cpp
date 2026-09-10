@@ -70,53 +70,53 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
     }
 
     const double baseline_rtt = m_rtt_tracker.get_smoothed_rtt_ms();
-    const bool is_cold_start = (m_rtt_tracker.sample_count() < constants::MIN_SAMPLES_FOR_MEDIAN_FILTER);
+    const size_t samples_before = m_rtt_tracker.sample_count();
+    const bool is_cold_start = (samples_before < constants::MIN_SAMPLES_FOR_MEDIAN_FILTER);
 
     double measured_rtt = 0.0;
     const auto elapsed = std::chrono::duration_cast<Milliseconds>(
         now - matched_req->timestamp
     ).count();
+
+    double effective_rtt = baseline_rtt;
+
     if (elapsed > 0.0 && elapsed < constants::MAX_PLAUSIBLE_RTT_MS) {
         measured_rtt = elapsed;
-        double sample_to_ingest = measured_rtt;
-        if (is_cold_start && m_rtt_tracker.sample_count() > 0) {
+        effective_rtt = measured_rtt;
+        bool is_outlier = false;
+
+        // Apply moving median spike filter to reject extreme latency anomalies
+        if (samples_before >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER) {
+            const double median_rtt = m_rtt_tracker.get_median_rtt_ms();
+            const double jitter = m_rtt_tracker.get_jitter_ms();
+            const double outlier_threshold = median_rtt + std::max(
+                constants::MIN_OUTLIER_TOLERANCE_MS,
+                constants::JITTER_SPIKE_MULTIPLIER * jitter
+            );
+            if (effective_rtt > outlier_threshold) {
+                effective_rtt = median_rtt;
+                is_outlier = true;
+            }
+        } else if (is_cold_start && samples_before > 0) {
+            // Cold-start protection: prior to having 3 samples for median filtering,
+            // guard against initial handshake jitter, hitching, or opening burst packet delays
             const double cold_start_cap = baseline_rtt + std::max(
                 constants::MIN_OUTLIER_TOLERANCE_MS,
                 baseline_rtt * 0.5
             );
-            if (sample_to_ingest > cold_start_cap) {
-                sample_to_ingest = cold_start_cap;
+            if (effective_rtt > cold_start_cap) {
+                effective_rtt = cold_start_cap;
+                is_outlier = true;
             }
         }
+
+        // Ingest effective_rtt if outlier, preventing transient spikes from poisoning jitter & median
+        const double sample_to_ingest = is_outlier ? effective_rtt : measured_rtt;
         m_rtt_tracker.add_sample(sample_to_ingest);
     }
 
     res.measured_rtt_ms = measured_rtt;
     res.smoothed_rtt_ms = m_rtt_tracker.get_smoothed_rtt_ms();
-
-    // Use measured RTT, applying moving median spike filter to reject extreme latency anomalies
-    double effective_rtt = (measured_rtt > 0.0) ? measured_rtt : res.smoothed_rtt_ms;
-    if (m_rtt_tracker.sample_count() >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER) {
-        const double median_rtt = m_rtt_tracker.get_median_rtt_ms();
-        const double jitter = m_rtt_tracker.get_jitter_ms();
-        const double outlier_threshold = median_rtt + std::max(
-            constants::MIN_OUTLIER_TOLERANCE_MS,
-            constants::JITTER_SPIKE_MULTIPLIER * jitter
-        );
-        if (effective_rtt > outlier_threshold) {
-            effective_rtt = median_rtt;
-        }
-    } else if (is_cold_start && m_rtt_tracker.sample_count() > 1) {
-        // Cold-start protection: prior to having 3 samples for median filtering,
-        // guard against initial handshake jitter, hitching, or opening burst packet delays
-        const double cold_start_cap = baseline_rtt + std::max(
-            constants::MIN_OUTLIER_TOLERANCE_MS,
-            baseline_rtt * 0.5
-        );
-        if (effective_rtt > cold_start_cap) {
-            effective_rtt = cold_start_cap;
-        }
-    }
 
     // 2. Compute latency delta to mitigate: Delta = RTT - TargetPing - SafetyMargin
     // Safety margin provides a conservative buffer to prevent over-reducing

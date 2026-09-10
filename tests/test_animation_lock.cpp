@@ -135,6 +135,39 @@ TEST_CASE(AnimationLock, MedianSpikeRejection) {
     TEST_ASSERT(res.applied);
 }
 
+TEST_CASE(AnimationLock, ConsecutiveSpikesDoNotInflateJitterOrBypassFilter) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 1. Prime with 5 stable 50ms samples
+    for (int i = 1; i <= 5; ++i) {
+        engine.record_action_request(0x5000 + i, i, t0);
+        (void)engine.calculate_mitigation(0x5000 + i, i, 600.0, t0 + std::chrono::milliseconds(50));
+    }
+    TEST_ASSERT_NEAR(engine.rtt_tracker().get_jitter_ms(), 0.0, 1.0);
+
+    // 2. Spike 1: Extreme 450ms packet hitch
+    engine.record_action_request(0x5010, 10, t0);
+    const auto res1 = engine.calculate_mitigation(0x5010, 10, 600.0, t0 + std::chrono::milliseconds(450));
+    TEST_ASSERT_NEAR(res1.delay_reduced_ms, 35.0, 2.0); // Clamped to median (50 - 15 = 35)
+
+    // Jitter must NOT be heavily inflated by the rejected spike
+    TEST_ASSERT(engine.rtt_tracker().get_jitter_ms() < 20.0);
+
+    // 3. Spike 2: Second consecutive 350ms spike immediately follows
+    engine.record_action_request(0x5011, 11, t0);
+    const auto res2 = engine.calculate_mitigation(0x5011, 11, 600.0, t0 + std::chrono::milliseconds(350));
+
+    // Spike 2 must ALSO be caught by the filter and replaced with median RTT (~50ms)
+    // rather than bypassing the filter and over-reducing the lock
+    TEST_ASSERT_NEAR(res2.delay_reduced_ms, 35.0, 2.0);
+    TEST_ASSERT_NEAR(res2.adjusted_lock_ms, 565.0, 2.0);
+    TEST_ASSERT(res2.applied);
+}
+
 TEST_CASE(AnimationLock, AbsoluteAntiCheatFloorEnforcement) {
     mitigator::MitigationConfig cfg{};
     cfg.min_animation_lock_ms = 5.0; // Attempt invalid low floor
