@@ -1,7 +1,9 @@
 #include "test_framework.hpp"
 #include "mitigator/sigscan.hpp"
 #include "mitigator/game_definitions.hpp"
+#include "mitigator/game_structures.hpp"
 #include <vector>
+#include <limits>
 
 TEST_CASE(SigScan, PatternParsing) {
     const auto sig = mitigator::memory::Signature::parse("48 89 5C 24 ? 48 89 6C");
@@ -91,4 +93,62 @@ TEST_CASE(SigScan, GameDefinitionsSignaturesParseSuccessfully) {
     static_assert(definitions::TOTAL_AVAILABLE_HOOKS == 2);
     static_assert(definitions::MIN_REQUIRED_PRIMARY_HOOKS == 2);
     static_assert(definitions::MIN_ACTION_EFFECT_LOCK_SECONDS > 0.0f);
+    static_assert(definitions::MAX_ACTION_EFFECT_LOCK_SECONDS >= 5.0f);
+    static_assert(definitions::MAX_ACTION_EFFECT_TARGETS == 32);
 }
+
+TEST_CASE(GameStructures, ActionEffectHeaderValidation) {
+    using namespace mitigator::game;
+
+    // 1. Null pointer rejection
+    TEST_ASSERT(!is_valid_action_effect_header(nullptr));
+
+    // 2. Normal valid header
+    ActionEffectHeader valid_header{};
+    valid_header.action_id = 1234;
+    valid_header.source_sequence = 42;
+    valid_header.animation_lock = 0.5f;
+    valid_header.num_targets = 1;
+    TEST_ASSERT(is_valid_action_effect_header(&valid_header));
+
+    // 3. Boundary values: 0.0f lock, exactly max targets (32), exactly max lock (60.0f)
+    ActionEffectHeader boundary_header{};
+    boundary_header.animation_lock = 0.0f;
+    boundary_header.num_targets = definitions::MAX_ACTION_EFFECT_TARGETS;
+    TEST_ASSERT(is_valid_action_effect_header(&boundary_header));
+
+    boundary_header.animation_lock = definitions::MAX_ACTION_EFFECT_LOCK_SECONDS;
+    TEST_ASSERT(is_valid_action_effect_header(&boundary_header));
+
+    // 4. Negative animation lock rejection
+    ActionEffectHeader negative_lock = valid_header;
+    negative_lock.animation_lock = -0.001f;
+    TEST_ASSERT(!is_valid_action_effect_header(&negative_lock));
+
+    // 5. Exceeded animation lock ceiling rejection
+    ActionEffectHeader excessive_lock = valid_header;
+    excessive_lock.animation_lock = 60.001f;
+    TEST_ASSERT(!is_valid_action_effect_header(&excessive_lock));
+
+    // 6. Non-finite animation lock rejection (NaN, +Inf, -Inf)
+    ActionEffectHeader nan_lock = valid_header;
+    nan_lock.animation_lock = std::numeric_limits<float>::quiet_NaN();
+    TEST_ASSERT(!is_valid_action_effect_header(&nan_lock));
+
+    ActionEffectHeader inf_lock = valid_header;
+    inf_lock.animation_lock = std::numeric_limits<float>::infinity();
+    TEST_ASSERT(!is_valid_action_effect_header(&inf_lock));
+
+    ActionEffectHeader neg_inf_lock = valid_header;
+    neg_inf_lock.animation_lock = -std::numeric_limits<float>::infinity();
+    TEST_ASSERT(!is_valid_action_effect_header(&neg_inf_lock));
+
+    // 7. Excessive num_targets rejection (> 32)
+    ActionEffectHeader too_many_targets = valid_header;
+    too_many_targets.num_targets = 33;
+    TEST_ASSERT(!is_valid_action_effect_header(&too_many_targets));
+
+    too_many_targets.num_targets = 255;
+    TEST_ASSERT(!is_valid_action_effect_header(&too_many_targets));
+}
+

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mitigator/game_definitions.hpp"
+#include <cmath>
 
 namespace mitigator::game {
 
@@ -80,5 +81,21 @@ static_assert(offsetof(ActionEffectHeader, animation_lock) == 0x10,
     "ActionEffectHeader::animation_lock offset mismatch");
 static_assert(offsetof(ActionEffectHeader, source_sequence) == 0x18,
     "ActionEffectHeader::source_sequence offset mismatch");
+
+/// Lightweight sanity check for ActionEffectHeader fields
+inline bool is_valid_action_effect_header(const ActionEffectHeader* header) noexcept {
+    if (header == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(header->animation_lock) ||
+        header->animation_lock < 0.0f ||
+        header->animation_lock > definitions::MAX_ACTION_EFFECT_LOCK_SECONDS) {
+        return false;
+    }
+    if (header->num_targets > definitions::MAX_ACTION_EFFECT_TARGETS) {
+        return false;
+    }
+    return true;
+}
 
 } // namespace mitigator::game

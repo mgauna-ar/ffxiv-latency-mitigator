@@ -219,9 +219,21 @@ static bool SafeWriteAnimationLock(game::ActionManager* mgr, float expected_lock
     return false;
 }
 
+static bool SafeValidateActionEffectHeader(const game::ActionEffectHeader* header) {
+    if (header == nullptr) {
+        return false;
+    }
+    MITIGATOR_SEH_TRY {
+        return game::is_valid_action_effect_header(header);
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return false;
+    }
+}
+
 static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float old_lock) {
     auto* mgr = s_action_manager.load(std::memory_order_acquire);
-    if (mgr == nullptr || effect_header == nullptr) {
+    if (mgr == nullptr || !SafeValidateActionEffectHeader(effect_header)) {
         return;
     }
 
