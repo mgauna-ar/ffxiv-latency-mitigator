@@ -65,10 +65,10 @@ using FnReceiveActionEffect = void(FFXIV_FASTCALL*)(
 FnUseActionLocation fp_original_use_action_location = nullptr;
 FnReceiveActionEffect fp_original_receive_action_effect = nullptr;
 
-static void OnActionDispatched(uint32_t action_id, uint32_t seq, bool is_cast, float cast_duration, bool is_queued) {
+static void OnActionDispatched(uint32_t action_id, uint32_t seq, bool is_cast, float cast_duration) {
     auto* mitigator = s_mitigator.load(std::memory_order_acquire);
     if (mitigator != nullptr) {
-        mitigator->record_action_request(action_id, seq, std::chrono::steady_clock::now(), is_cast, cast_duration, is_queued);
+        mitigator->record_action_request(action_id, seq, std::chrono::steady_clock::now(), is_cast, cast_duration);
     }
 }
 
@@ -117,18 +117,6 @@ static SafeCastState SafeReadActionManagerCastState(game::ActionManager* self) {
     return state;
 }
 
-static bool SafeReadIsQueued(game::ActionManager* self) {
-    MITIGATOR_SEH_TRY {
-        if (self != nullptr) {
-            return self->is_queued;
-        }
-    }
-    MITIGATOR_SEH_EXCEPT {
-        return false;
-    }
-    return false;
-}
-
 // Detour implementations with RAII scope protection
 static uint8_t DetourUseActionLocationProtected(
     game::ActionManager* self,
@@ -143,12 +131,6 @@ static uint8_t DetourUseActionLocationProtected(
         s_action_manager.store(self, std::memory_order_release);
     }
 
-    // Pre-dispatch queued check: if the action was buffered in the client queue,
-    // the game engine's internal UseActionLocation execution may clear self->is_queued
-    // to false during dispatch before returning to this detour. Checking both pre-
-    // and post-dispatch states guarantees that queued actions are never misidentified.
-    const bool was_queued_before = SafeReadIsQueued(self);
-
     const uint8_t ret = SafeCallOriginalUseAction(
         fp_original_use_action_location,
         self, action_type, action_id, target_id, target_location, extra_param, a7
@@ -160,9 +142,8 @@ static uint8_t DetourUseActionLocationProtected(
 
         const bool is_cast = cast_state.is_casting && (cast_state.cast_time > 0.0f);
         const float cast_time = is_cast ? cast_state.cast_time : 0.0f;
-        const bool is_queued = was_queued_before || cast_state.is_queued;
 
-        OnActionDispatched(action_id, cast_state.sequence, is_cast, cast_time, is_queued);
+        OnActionDispatched(action_id, cast_state.sequence, is_cast, cast_time);
 
         auto* mitigator = s_mitigator.load(std::memory_order_acquire);
         if (mitigator != nullptr) {
@@ -187,12 +168,6 @@ uint8_t FFXIV_FASTCALL DetourUseActionLocation(
     uint32_t extra_param,
     uint8_t a7
 ) {
-    if (!HookManager::instance().is_installed()) {
-        return SafeCallOriginalUseAction(
-            fp_original_use_action_location,
-            self, action_type, action_id, target_id, target_location, extra_param, a7
-        );
-    }
     DetourScope scope;
     return DetourUseActionLocationProtected(
         self, action_type, action_id, target_id, target_location, extra_param, a7
@@ -224,12 +199,20 @@ static bool SafeWriteAnimationLock(game::ActionManager* mgr, float desired_lock)
     return false;
 }
 
-static void ProcessActionEffect(game::ActionManager* mgr, game::ActionEffectHeader* effect_header, float new_lock) {
+static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float old_lock) {
+    auto* mgr = s_action_manager.load(std::memory_order_acquire);
     if (mgr == nullptr || effect_header == nullptr) {
         return;
     }
 
-    if (new_lock <= game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS || !std::isfinite(new_lock)) {
+    const float new_lock = SafeReadAnimationLock(mgr);
+    const bool lock_changed = (new_lock != old_lock);
+    const bool is_our_sequence = (effect_header->source_sequence != 0);
+
+    // Zone-wide action effect isolation:
+    // Only mitigate if animation lock was actually changed or belongs to our sequence,
+    // and new lock is positive and finite
+    if ((!lock_changed && !is_our_sequence) || new_lock <= game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS || !std::isfinite(new_lock)) {
         return;
     }
 
@@ -322,19 +305,11 @@ static void DetourReceiveActionEffectProtected(
         fp_original_receive_action_effect,
         source_id, source_character, pos, effect_header, effect_data, targets
     );
-    if (!ok || mgr == nullptr) {
+    if (!ok) {
         return;
     }
 
-    const float new_lock = SafeReadAnimationLock(mgr);
-    const bool lock_changed = (new_lock != old_lock);
-    const bool is_our_sequence = (effect_header->source_sequence != 0);
-
-    if ((!lock_changed && !is_our_sequence) || new_lock <= game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS || !std::isfinite(new_lock)) {
-        return;
-    }
-
-    ProcessActionEffect(mgr, effect_header, new_lock);
+    ProcessActionEffect(effect_header, old_lock);
 }
 
 void FFXIV_FASTCALL DetourReceiveActionEffect(
@@ -345,13 +320,6 @@ void FFXIV_FASTCALL DetourReceiveActionEffect(
     void* effect_data,
     void* targets
 ) {
-    if (!HookManager::instance().is_installed()) {
-        SafeCallOriginalReceiveActionEffect(
-            fp_original_receive_action_effect,
-            source_id, source_character, pos, effect_header, effect_data, targets
-        );
-        return;
-    }
     DetourScope scope;
     DetourReceiveActionEffectProtected(
         source_id, source_character, pos, effect_header, effect_data, targets

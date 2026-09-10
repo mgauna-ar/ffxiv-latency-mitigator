@@ -25,8 +25,7 @@ public:
         SequenceId sequence,
         TimePoint timestamp = std::chrono::steady_clock::now(),
         bool is_cast = false,
-        float cast_duration_seconds = 0.0f,
-        bool is_queued = false
+        float cast_duration_seconds = 0.0f
     );
 
     /**
@@ -81,19 +80,6 @@ public:
     [[nodiscard]] const RollingRttTracker& rtt_tracker() const { return m_rtt_tracker; }
     [[nodiscard]] const SequenceTracker& sequence_tracker() const { return m_seq_tracker; }
     [[nodiscard]] const CastTracker& cast_tracker() const { return m_cast_tracker; }
-    enum class OutlierDirection { None, Up, Down };
-
-    /// Returns consecutive outlier sample count in the current outlier direction.
-    [[nodiscard]] size_t consecutive_outliers() const {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_consecutive_outliers;
-    }
-
-    /// Returns the current active outlier direction.
-    [[nodiscard]] OutlierDirection outlier_direction() const {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_outlier_direction;
-    }
 
 private:
     mutable std::mutex m_mutex;
@@ -101,10 +87,6 @@ private:
     RollingRttTracker m_rtt_tracker;
     SequenceTracker m_seq_tracker;
     CastTracker m_cast_tracker;
-
-    // Outlier shift detection
-    OutlierDirection m_outlier_direction{OutlierDirection::None};
-    size_t m_consecutive_outliers{0};
 
     // Session telemetry counters
     uint64_t m_total_actions_requested{0};

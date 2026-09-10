@@ -5,15 +5,9 @@ namespace mitigator {
 
 void CastTracker::on_cast_begin(ActionId action_id, float cast_time_seconds, TimePoint now) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (cast_time_seconds <= 0.0f || !std::isfinite(cast_time_seconds)) {
-        m_is_casting = false;
-        m_cast_action_id = 0;
-        m_cast_duration_seconds = 0.0f;
-        return;
-    }
     m_is_casting = true;
     m_cast_action_id = action_id;
-    m_cast_duration_seconds = std::min(cast_time_seconds, constants::ABSOLUTE_MAX_CAST_DURATION_SECONDS);
+    m_cast_duration_seconds = std::max(0.0f, cast_time_seconds);
     m_cast_start = now;
 }
 
