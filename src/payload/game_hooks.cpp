@@ -180,13 +180,52 @@ uint8_t FFXIV_FASTCALL DetourUseActionLocation(
     );
 }
 
+static float SafeReadAnimationLock(game::ActionManager* mgr) {
+    MITIGATOR_SEH_TRY {
+        if (mgr != nullptr) {
+            return mgr->animation_lock;
+        }
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return 0.0f;
+    }
+    return 0.0f;
+}
+
+static bool SafeWriteAnimationLock(game::ActionManager* mgr, float expected_lock, float desired_lock) {
+    MITIGATOR_SEH_TRY {
+        if (mgr == nullptr || !std::isfinite(desired_lock) || desired_lock < 0.0f) {
+            return false;
+        }
+
+        const float current_lock = mgr->animation_lock;
+
+        // If the animation lock changed significantly while calculating
+        // (e.g. death, stun, cancellation, or a different effect took over), abort the write.
+        if (std::abs(current_lock - expected_lock) > 0.050f) {
+            return false;
+        }
+
+        // Account for any frame time that elapsed between read and write so we never rewind the clock
+        const float frame_delta = (current_lock < expected_lock) ? (expected_lock - current_lock) : 0.0f;
+        const float adjusted_desired = (std::max)(0.0f, desired_lock - frame_delta);
+
+        mgr->animation_lock = adjusted_desired;
+        return true;
+    }
+    MITIGATOR_SEH_EXCEPT {
+        return false;
+    }
+    return false;
+}
+
 static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float old_lock) {
     auto* mgr = s_action_manager.load(std::memory_order_acquire);
     if (mgr == nullptr || effect_header == nullptr) {
         return;
     }
 
-    const float new_lock = mgr->animation_lock;
+    const float new_lock = SafeReadAnimationLock(mgr);
     const bool lock_changed = (new_lock != old_lock);
     const bool is_our_sequence = (effect_header->source_sequence != 0);
 
@@ -217,9 +256,10 @@ static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float o
         mitigator->record_cast_end();
     }
 
+    bool write_applied = false;
     if (result.applied) {
         const float new_lock_seconds = static_cast<float>(result.adjusted_lock_ms / constants::MS_PER_SECOND);
-        mgr->animation_lock = new_lock_seconds;
+        write_applied = SafeWriteAnimationLock(mgr, new_lock, new_lock_seconds);
     }
 
 
@@ -236,7 +276,7 @@ static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float o
         payload.jitter_ms = static_cast<float>(mitigator->rtt_tracker().get_jitter_ms());
         payload.clamped_floor = result.clamped_by_floor ? 1 : 0;
         payload.dry_run = mitigator->get_config().dry_run ? 1 : 0;
-        payload.applied = result.applied ? 1 : 0;
+        payload.applied = (result.applied && write_applied) ? 1 : 0;
         payload.cast_active = result.cast_active ? 1 : 0;
         payload.timestamp_ms = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -245,18 +285,6 @@ static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float o
         );
         ipc->send_telemetry(payload);
     }
-}
-
-static float SafeReadAnimationLock(game::ActionManager* mgr) {
-    MITIGATOR_SEH_TRY {
-        if (mgr != nullptr) {
-            return mgr->animation_lock;
-        }
-    }
-    MITIGATOR_SEH_EXCEPT {
-        return 0.0f;
-    }
-    return 0.0f;
 }
 
 static bool SafeCallOriginalReceiveActionEffect(
