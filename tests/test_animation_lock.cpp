@@ -125,7 +125,7 @@ TEST_CASE(AnimationLock, MedianSpikeRejection) {
     const auto t0 = std::chrono::steady_clock::now();
 
     // Prime with several stable 50ms samples
-    for (int i = 1; i <= 4; ++i) {
+    for (int i = 1; i <= 5; ++i) {
         engine.record_action_request(0x3000 + i, i, t0);
         (void)engine.calculate_mitigation(0x3000 + i, i, 600.0, t0 + std::chrono::milliseconds(50));
     }
@@ -377,5 +377,28 @@ TEST_CASE(AnimationLock, ColdStartSpikeRejectionPreventsFloorClamp) {
     // Verify session telemetry: zero floor clamps occurred
     const auto stats = engine.get_session_stats();
     TEST_ASSERT_EQ(stats.total_floor_clamps, 0);
+
+    // Sample 3 & 4: Ingest stable samples to bring sample count to 4
+    const auto t2 = t1 + std::chrono::milliseconds(600);
+    engine.record_action_request(0x1003, 3, t2);
+    (void)engine.calculate_mitigation(0x1003, 3, 600.0, t2 + std::chrono::milliseconds(80));
+
+    const auto t3 = t2 + std::chrono::milliseconds(600);
+    engine.record_action_request(0x1004, 4, t3);
+    (void)engine.calculate_mitigation(0x1004, 4, 600.0, t3 + std::chrono::milliseconds(80));
+
+    // Sample 5: samples_before = 4 (< 5), still guarded by cold_start_guard
+    const auto t4 = t3 + std::chrono::milliseconds(600);
+    engine.record_action_request(0x1005, 5, t4);
+    const auto res5 = engine.calculate_mitigation(0x1005, 5, 600.0, t4 + std::chrono::milliseconds(500));
+    TEST_ASSERT(res5.cold_start_guard);
+    TEST_ASSERT(!res5.spike_filtered);
+
+    // Sample 6: samples_before = 5 (>= MIN_SAMPLES_FOR_MEDIAN_FILTER = 5), switches to full median filter
+    const auto t5 = t4 + std::chrono::milliseconds(600);
+    engine.record_action_request(0x1006, 6, t5);
+    const auto res6 = engine.calculate_mitigation(0x1006, 6, 600.0, t5 + std::chrono::milliseconds(500));
+    TEST_ASSERT(!res6.cold_start_guard);
+    TEST_ASSERT(res6.spike_filtered);
 }
 

@@ -52,7 +52,7 @@ namespace constants {
     constexpr double ONE_WAY_LATENCY_RATIO = 0.5;
 
     /// Minimum samples needed before activating moving median spike rejection
-    constexpr size_t MIN_SAMPLES_FOR_MEDIAN_FILTER = 3;
+    constexpr size_t MIN_SAMPLES_FOR_MEDIAN_FILTER = 5;
     /// Minimum latency deviation tolerance in ms before considering an RTT spike an outlier
     constexpr double MIN_OUTLIER_TOLERANCE_MS = 50.0;
     /// Multiplier on measured jitter to calculate outlier rejection threshold
