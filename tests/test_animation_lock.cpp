@@ -471,3 +471,22 @@ TEST_CASE(AnimationLock, ConcurrentAccessStressTest) {
     TEST_ASSERT_EQ(final_stats.total_actions_requested, NUM_ACTIONS);
 }
 
+TEST_CASE(AnimationLock, InitialActionQueueDelayProtectedByColdStartGuard) {
+    mitigator::MitigationConfig cfg{};
+    cfg.target_ping_ms = 15.0;
+    cfg.min_animation_lock_ms = 25.0;
+
+    mitigator::AnimationLockMitigator engine(cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // The very first action (sample 0) suffers an opening 500ms delay (e.g. queued before pull)
+    engine.record_action_request(0x1000, 1, t0);
+    const auto res = engine.calculate_mitigation(0x1000, 1, 600.0, t0 + std::chrono::milliseconds(500));
+
+    // Must be capped by cold_start_guard to 200ms rather than causing a 25ms floor clamp
+    TEST_ASSERT(res.cold_start_guard);
+    TEST_ASSERT(!res.clamped_by_floor);
+    TEST_ASSERT_NEAR(res.adjusted_lock_ms, 415.0, 2.0); // 600 - (200 - 15) = 415ms
+    TEST_ASSERT_EQ(engine.get_session_stats().total_floor_clamps, 0);
+}
+

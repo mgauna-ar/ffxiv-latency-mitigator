@@ -98,13 +98,12 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
                 is_outlier = true;
                 res.spike_filtered = true;
             }
-        } else if (is_cold_start && samples_before > 0) {
-            // Cold-start protection: prior to having 3 samples for median filtering,
-            // guard against initial handshake jitter, hitching, or opening burst packet delays
-            const double cold_start_cap = baseline_rtt + std::max(
-                constants::MIN_OUTLIER_TOLERANCE_MS,
-                baseline_rtt * 0.5
-            );
+        } else if (is_cold_start) {
+            // Cold-start protection: prior to having median filtering samples,
+            // guard against initial handshake jitter, hitching, opening burst, or queue delays
+            const double cold_start_cap = (samples_before == 0)
+                ? 200.0
+                : (baseline_rtt + std::max(constants::MIN_OUTLIER_TOLERANCE_MS, baseline_rtt * 0.5));
             if (effective_rtt > cold_start_cap) {
                 effective_rtt = cold_start_cap;
                 is_outlier = true;

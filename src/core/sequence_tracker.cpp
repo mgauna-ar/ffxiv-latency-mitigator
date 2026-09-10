@@ -80,6 +80,19 @@ std::optional<ActionRequestInfo> SequenceTracker::match_response(
         }
     }
 
+    // 3. Fallback: If sequence and action_id are unspecified (generic response)
+    // and exactly 1 pending action exists with sequence == 0, and was recent (< 1500ms), match it
+    if (sequence == 0 && action_id == 0 && m_pending.size() == 1 && m_pending.front().sequence == 0) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            timestamp - m_pending.front().timestamp
+        );
+        if (elapsed >= std::chrono::milliseconds(0) && elapsed < constants::GENERIC_FALLBACK_MAX_ELAPSED) {
+            ActionRequestInfo matched = m_pending.front();
+            m_pending.pop_front();
+            return matched;
+        }
+    }
+
     return std::nullopt;
 }
 

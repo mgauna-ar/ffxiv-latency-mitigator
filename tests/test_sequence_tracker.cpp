@@ -220,3 +220,20 @@ TEST_CASE(SequenceTracker, OutOfOrderAcrossWraparoundBoundary) {
     TEST_ASSERT_EQ(m1->sequence, 65535);
     TEST_ASSERT_EQ(tracker.pending_count(), 0);
 }
+
+TEST_CASE(SequenceTracker, GenericZeroSequenceFallbackMatchesUntrackedAction) {
+    mitigator::SequenceTracker tracker;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Action recorded with sequence 0 (e.g. untracked client dispatch)
+    tracker.record_request(0x00FF, 0, t0);
+    TEST_ASSERT_EQ(tracker.pending_count(), 1);
+
+    // Generic effect arrives with sequence 0 and action_id 0 within 1500ms
+    auto matched = tracker.match_response(0, 0, t0 + std::chrono::milliseconds(75));
+    TEST_ASSERT(matched.has_value());
+    TEST_ASSERT_EQ(matched->action_id, 0x00FF);
+    TEST_ASSERT_EQ(matched->sequence, 0);
+    TEST_ASSERT_EQ(tracker.pending_count(), 0);
+}
+

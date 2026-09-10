@@ -140,12 +140,6 @@ static uint8_t DetourUseActionLocationProtected(
     if (ret != 0) {
         const SafeCastState cast_state = SafeReadActionManagerCastState(self);
 
-        // If the action was placed into the client-side queue, it has not been dispatched
-        // to the server yet. ActionManager will invoke UseActionLocation again upon dequeuing.
-        if (cast_state.is_queued) {
-            return ret;
-        }
-
         const bool is_cast = cast_state.is_casting && (cast_state.cast_time > 0.0f);
         const float cast_time = is_cast ? cast_state.cast_time : 0.0f;
 
@@ -155,8 +149,8 @@ static uint8_t DetourUseActionLocationProtected(
         if (mitigator != nullptr) {
             if (is_cast) {
                 mitigator->record_cast_begin(action_id, cast_time);
-            } else if (!cast_state.is_casting) {
-                // Only clear cast state if ActionManager confirms the player is not actively casting
+            } else {
+                // Instant action dispatched: clear any active cast in tracker
                 mitigator->record_cast_end();
             }
         }
@@ -192,26 +186,12 @@ static float SafeReadAnimationLock(game::ActionManager* mgr) {
     return 0.0f;
 }
 
-static bool SafeWriteAnimationLock(game::ActionManager* mgr, float expected_lock, float desired_lock) {
+static bool SafeWriteAnimationLock(game::ActionManager* mgr, float desired_lock) {
     MITIGATOR_SEH_TRY {
-        if (mgr == nullptr || !std::isfinite(desired_lock) || desired_lock < 0.0f) {
-            return false;
+        if (mgr != nullptr && std::isfinite(desired_lock) && desired_lock >= 0.0f) {
+            mgr->animation_lock = desired_lock;
+            return true;
         }
-
-        const float current_lock = mgr->animation_lock;
-
-        // If the animation lock changed significantly while calculating
-        // (e.g. death, stun, cancellation, or a different effect took over), abort the write.
-        if (std::abs(current_lock - expected_lock) > 0.050f) {
-            return false;
-        }
-
-        // Account for any frame time that elapsed between read and write so we never rewind the clock
-        const float frame_delta = (current_lock < expected_lock) ? (expected_lock - current_lock) : 0.0f;
-        const float adjusted_desired = (std::max)(0.0f, desired_lock - frame_delta);
-
-        mgr->animation_lock = adjusted_desired;
-        return true;
     }
     MITIGATOR_SEH_EXCEPT {
         return false;
@@ -251,15 +231,15 @@ static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float o
         original_lock_ms
     );
 
-    // If this effect completed an active cast, mark cast completed in tracker
-    if (result.cast_active) {
+    // If an action completes, clear any active cast tracking
+    if (mitigator->is_casting()) {
         mitigator->record_cast_end();
     }
 
     bool write_applied = false;
     if (result.applied) {
         const float new_lock_seconds = static_cast<float>(result.adjusted_lock_ms / constants::MS_PER_SECOND);
-        write_applied = SafeWriteAnimationLock(mgr, new_lock, new_lock_seconds);
+        write_applied = SafeWriteAnimationLock(mgr, new_lock_seconds);
     }
 
 
