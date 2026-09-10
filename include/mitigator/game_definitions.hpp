@@ -26,12 +26,6 @@ namespace definitions {
 
     /// Minimum animation lock threshold in seconds for local player action effect detection
     constexpr float MIN_ACTION_EFFECT_LOCK_SECONDS = 0.01f;
-
-    /// Maximum reasonable animation lock duration in seconds for action effect validation
-    constexpr float MAX_ACTION_EFFECT_LOCK_SECONDS = 60.0f;
-
-    /// Maximum number of targets in an ActionEffect packet supported by the game engine
-    constexpr uint8_t MAX_ACTION_EFFECT_TARGETS = 32;
 } // namespace definitions
 
 /// Memory offsets within the game's ActionManager structure (FFXIV dx11 x64)
