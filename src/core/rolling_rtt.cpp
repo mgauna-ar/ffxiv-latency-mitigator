@@ -102,6 +102,11 @@ size_t RollingRttTracker::sample_count() const {
     return m_total_samples;
 }
 
+std::vector<double> RollingRttTracker::get_samples() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return std::vector<double>(m_samples.begin(), m_samples.end());
+}
+
 void RollingRttTracker::set_window_size(size_t window_size) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_window_size = window_size > 0 ? window_size : 1;

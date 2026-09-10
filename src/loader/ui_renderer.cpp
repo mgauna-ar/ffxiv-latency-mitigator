@@ -49,7 +49,7 @@ void UiRenderer::log_action(const ipc::TelemetryPayload& t, bool verbose) {
     std::lock_guard<std::mutex> lock(m_render_mutex);
 
     ++m_total_actions;
-    if (t.delay_reduced_ms > 0.0f) {
+    if (t.applied) {
         ++m_actions_mitigated;
         m_cumulative_time_saved_ms += t.delay_reduced_ms;
     }
@@ -60,8 +60,8 @@ void UiRenderer::log_action(const ipc::TelemetryPayload& t, bool verbose) {
         return; // In non-verbose mode, skip actions that required no mitigation
     }
 
-    std::cout << color::GRAY << "[#" << std::setw(4) << std::setfill('0') << m_total_actions << "] " << color::RESET
-              << color::BOLD << "Action: " << color::CYAN << "0x" << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << t.action_id << std::dec << color::RESET
+    std::cout << color::GRAY << "[#" << std::setw(4) << std::setfill('0') << m_total_actions << std::setfill(' ') << "] " << color::RESET
+              << color::BOLD << "Action: " << color::CYAN << "0x" << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << t.action_id << std::setfill(' ') << std::dec << color::RESET
               << " | "
               << "Orig: " << std::fixed << std::setprecision(1) << t.original_lock_ms << "ms -> "
               << color::GREEN << t.adjusted_lock_ms << "ms" << color::RESET
@@ -70,6 +70,12 @@ void UiRenderer::log_action(const ipc::TelemetryPayload& t, bool verbose) {
 
     if (t.clamped_floor) {
         std::cout << " " << color::YELLOW << "[Floor Clamp]" << color::RESET;
+    }
+    if (t.spike_filtered) {
+        std::cout << " " << color::YELLOW << "[Spike Filtered]" << color::RESET;
+    }
+    if (t.cold_start_guard) {
+        std::cout << " " << color::YELLOW << "[Cold Start]" << color::RESET;
     }
     if (t.dry_run) {
         std::cout << " " << color::BLUE << "[Dry Run]" << color::RESET;
@@ -96,11 +102,30 @@ void UiRenderer::render_stats_summary() {
     const double avg_reduction = m_actions_mitigated > 0 ?
         (m_cumulative_time_saved_ms / static_cast<double>(m_actions_mitigated)) : 0.0;
 
+    const char* quality_str = "[INITIALIZING]";
+    const char* quality_color = color::GRAY;
+    if (m_total_actions > 0 && m_last_smoothed_rtt > 0.0f) {
+        if (m_last_smoothed_rtt <= 80.0f && m_last_jitter <= 5.0f) {
+            quality_str = "[EXCELLENT]";
+            quality_color = color::GREEN;
+        } else if (m_last_smoothed_rtt <= 150.0f && m_last_jitter <= 15.0f) {
+            quality_str = "[GOOD]";
+            quality_color = color::CYAN;
+        } else if (m_last_smoothed_rtt <= 220.0f && m_last_jitter <= 30.0f) {
+            quality_str = "[FAIR]";
+            quality_color = color::YELLOW;
+        } else {
+            quality_str = "[POOR]";
+            quality_color = color::RED;
+        }
+    }
+
     std::cout << color::CYAN << "--- Telemetry Summary ---------------------------------------------\n" << color::RESET;
     std::cout << "Mitigated: " << color::GREEN << m_actions_mitigated << "/" << m_total_actions << color::RESET
               << " | Total Saved: " << color::YELLOW << color::BOLD << std::fixed << std::setprecision(2) << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
               << " | Avg/Action: " << color::CYAN << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::RESET
-              << " | Ping: " << m_last_smoothed_rtt << "ms (jitter: " << m_last_jitter << "ms)\n";
+              << " | Ping: " << m_last_smoothed_rtt << "ms (jitter: " << m_last_jitter << "ms)"
+              << " " << quality_color << quality_str << color::RESET << "\n";
 }
 
 void UiRenderer::render_hotkey_bar(bool dry_run, bool verbose) {
@@ -119,6 +144,8 @@ void UiRenderer::reset_stats() {
     m_total_actions = 0;
     m_actions_mitigated = 0;
     m_cumulative_time_saved_ms = 0.0;
+    m_last_smoothed_rtt = 0.0f;
+    m_last_jitter = 0.0f;
 }
 
 } // namespace mitigator::loader

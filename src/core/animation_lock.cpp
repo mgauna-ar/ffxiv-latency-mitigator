@@ -96,6 +96,7 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
             if (effective_rtt > outlier_threshold) {
                 effective_rtt = median_rtt;
                 is_outlier = true;
+                res.spike_filtered = true;
             }
         } else if (is_cold_start && samples_before > 0) {
             // Cold-start protection: prior to having 3 samples for median filtering,
@@ -107,6 +108,7 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
             if (effective_rtt > cold_start_cap) {
                 effective_rtt = cold_start_cap;
                 is_outlier = true;
+                res.cold_start_guard = true;
             }
         }
 

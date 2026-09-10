@@ -129,6 +129,12 @@ struct MitigationResult {
 
     /// Whether this action was executed during an active cast.
     bool cast_active{false};
+
+    /// Whether this calculation triggered the moving median spike filter.
+    bool spike_filtered{false};
+
+    /// Whether this calculation triggered cold-start spike protection.
+    bool cold_start_guard{false};
 };
 
 /// Real-time session metrics and telemetry summary.

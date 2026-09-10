@@ -38,6 +38,9 @@ public:
     /// Returns the total number of valid samples recorded.
     [[nodiscard]] size_t sample_count() const;
 
+    /// Returns a snapshot copy of the raw RTT samples in the current rolling window.
+    [[nodiscard]] std::vector<double> get_samples() const;
+
     /// Adjusts the rolling window size.
     void set_window_size(size_t window_size);
 

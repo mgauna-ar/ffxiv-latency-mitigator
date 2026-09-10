@@ -26,6 +26,8 @@ TEST_CASE(AnimationLock, StandardPingMitigation) {
     TEST_ASSERT_NEAR(res.adjusted_lock_ms, 465.0, 0.5);
     TEST_ASSERT(res.applied);
     TEST_ASSERT(!res.clamped_by_floor);
+    TEST_ASSERT(!res.spike_filtered);
+    TEST_ASSERT(!res.cold_start_guard);
 }
 
 TEST_CASE(AnimationLock, LowPingNoMitigationNeeded) {
@@ -138,6 +140,8 @@ TEST_CASE(AnimationLock, MedianSpikeRejection) {
     TEST_ASSERT_NEAR(res.delay_reduced_ms, 35.0, 2.0);
     TEST_ASSERT_NEAR(res.adjusted_lock_ms, 565.0, 2.0);
     TEST_ASSERT(res.applied);
+    TEST_ASSERT(res.spike_filtered);
+    TEST_ASSERT(!res.cold_start_guard);
 }
 
 TEST_CASE(AnimationLock, ConsecutiveSpikesDoNotInflateJitterOrBypassFilter) {
@@ -158,6 +162,7 @@ TEST_CASE(AnimationLock, ConsecutiveSpikesDoNotInflateJitterOrBypassFilter) {
     engine.record_action_request(0x5010, 10, t0);
     const auto res1 = engine.calculate_mitigation(0x5010, 10, 600.0, t0 + std::chrono::milliseconds(450));
     TEST_ASSERT_NEAR(res1.delay_reduced_ms, 35.0, 2.0); // Clamped to median (50 - 15 = 35)
+    TEST_ASSERT(res1.spike_filtered);
 
     // Jitter must NOT be heavily inflated by the rejected spike
     TEST_ASSERT(engine.rtt_tracker().get_jitter_ms() < 20.0);
@@ -171,6 +176,7 @@ TEST_CASE(AnimationLock, ConsecutiveSpikesDoNotInflateJitterOrBypassFilter) {
     TEST_ASSERT_NEAR(res2.delay_reduced_ms, 35.0, 2.0);
     TEST_ASSERT_NEAR(res2.adjusted_lock_ms, 565.0, 2.0);
     TEST_ASSERT(res2.applied);
+    TEST_ASSERT(res2.spike_filtered);
 }
 
 TEST_CASE(AnimationLock, AbsoluteAntiCheatFloorEnforcement) {
@@ -351,6 +357,8 @@ TEST_CASE(AnimationLock, ColdStartSpikeRejectionPreventsFloorClamp) {
     const auto res1 = engine.calculate_mitigation(0x1001, 1, 600.0, t0 + std::chrono::milliseconds(80));
     TEST_ASSERT(res1.applied);
     TEST_ASSERT(!res1.clamped_by_floor);
+    TEST_ASSERT(!res1.cold_start_guard);
+    TEST_ASSERT(!res1.spike_filtered);
     TEST_ASSERT_NEAR(res1.adjusted_lock_ms, 535.0, 1.0);
 
     // Sample 2: Action 2 suffers an extreme 550ms opening burst / queuing delay
@@ -361,6 +369,8 @@ TEST_CASE(AnimationLock, ColdStartSpikeRejectionPreventsFloorClamp) {
     // With cold-start protection, effective RTT is capped to baseline (80ms) + 50ms = 130ms
     // Adjusted lock = 600 - (130 - 15) = 485ms (well above 25ms floor)
     TEST_ASSERT(!res2.clamped_by_floor);
+    TEST_ASSERT(res2.cold_start_guard);
+    TEST_ASSERT(!res2.spike_filtered);
     TEST_ASSERT_NEAR(res2.adjusted_lock_ms, 485.0, 2.0);
     TEST_ASSERT(res2.adjusted_lock_ms > 400.0);
 

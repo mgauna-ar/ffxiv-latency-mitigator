@@ -36,6 +36,7 @@ target_include_directories(mitigator_core PUBLIC
 enable_testing()
 
 add_executable(mitigator_tests
+    src/loader/ui_renderer.cpp
     tests/test_main.cpp
     tests/test_rolling_rtt.cpp
     tests/test_sequence_tracker.cpp
@@ -43,6 +44,7 @@ add_executable(mitigator_tests
     tests/test_animation_lock.cpp
     tests/test_ipc_protocol.cpp
     tests/test_sigscan.cpp
+    tests/test_ui_renderer.cpp
 )
 
 target_include_directories(mitigator_tests PRIVATE

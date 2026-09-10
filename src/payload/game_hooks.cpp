@@ -278,6 +278,8 @@ static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float o
         payload.dry_run = mitigator->get_config().dry_run ? 1 : 0;
         payload.applied = (result.applied && write_applied) ? 1 : 0;
         payload.cast_active = result.cast_active ? 1 : 0;
+        payload.spike_filtered = result.spike_filtered ? 1 : 0;
+        payload.cold_start_guard = result.cold_start_guard ? 1 : 0;
         payload.timestamp_ms = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()

@@ -96,3 +96,31 @@ TEST_CASE(RollingRtt, MultithreadedConcurrentSamples) {
     TEST_ASSERT_EQ(tracker.sample_count(), NUM_THREADS * SAMPLES_PER_THREAD);
     TEST_ASSERT(tracker.get_smoothed_rtt_ms() >= 60.0 && tracker.get_smoothed_rtt_ms() <= 64.0);
 }
+
+TEST_CASE(RollingRtt, GetSamplesSnapshot) {
+    mitigator::RollingRttTracker tracker(3, 50.0);
+    // Initially empty
+    auto samples = tracker.get_samples();
+    TEST_ASSERT(samples.empty());
+
+    tracker.add_sample(40.0);
+    tracker.add_sample(50.0);
+    samples = tracker.get_samples();
+    TEST_ASSERT_EQ(samples.size(), 2);
+    TEST_ASSERT_NEAR(samples[0], 40.0, 0.001);
+    TEST_ASSERT_NEAR(samples[1], 50.0, 0.001);
+
+    // Overflow rolling window of 3
+    tracker.add_sample(60.0);
+    tracker.add_sample(70.0);
+    samples = tracker.get_samples();
+    TEST_ASSERT_EQ(samples.size(), 3);
+    TEST_ASSERT_NEAR(samples[0], 50.0, 0.001);
+    TEST_ASSERT_NEAR(samples[1], 60.0, 0.001);
+    TEST_ASSERT_NEAR(samples[2], 70.0, 0.001);
+
+    // Reset clears samples
+    tracker.reset(50.0);
+    samples = tracker.get_samples();
+    TEST_ASSERT(samples.empty());
+}

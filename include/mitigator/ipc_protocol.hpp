@@ -62,6 +62,9 @@ struct TelemetryPayload {
     uint8_t dry_run{0};
     uint8_t applied{0};
     uint8_t cast_active{0};
+    uint8_t spike_filtered{0};
+    uint8_t cold_start_guard{0};
+    uint8_t pad[2]{0};
     uint64_t timestamp_ms{0};
 };
 

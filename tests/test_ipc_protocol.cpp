@@ -15,7 +15,11 @@ TEST_CASE(IpcProtocol, TelemetryRoundtrip) {
     original.dry_run = 0;
     original.applied = 1;
     original.cast_active = 0;
+    original.spike_filtered = 1;
+    original.cold_start_guard = 0;
     original.timestamp_ms = 123456789;
+
+    static_assert(sizeof(mitigator::ipc::TelemetryPayload) == 48, "TelemetryPayload size must be 48 bytes");
 
     const auto buffer = mitigator::ipc::serialize_telemetry(original);
     TEST_ASSERT(buffer.size() > sizeof(mitigator::ipc::Header));
@@ -33,6 +37,8 @@ TEST_CASE(IpcProtocol, TelemetryRoundtrip) {
     TEST_ASSERT_EQ(decoded->sequence, 42);
     TEST_ASSERT_NEAR(decoded->delay_reduced_ms, 135.0f, 0.001f);
     TEST_ASSERT_EQ(decoded->applied, 1);
+    TEST_ASSERT_EQ(decoded->spike_filtered, 1);
+    TEST_ASSERT_EQ(decoded->cold_start_guard, 0);
 }
 
 TEST_CASE(IpcProtocol, CommandRoundtrip) {
