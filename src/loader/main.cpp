@@ -133,10 +133,15 @@ void print_help(const char* exe_name) {
               << "  --help, -h            Show this help text\n\n"
               << "Hotkeys during execution:\n"
               << "  [Q]                   Cleanly unhook detours and exit\n"
+              << "  [1]/[2]/[3]           Switch between Overview, Analytics, and Settings tabs\n"
+              << "  [Tab] / Arrows        Cycle dashboard tabs\n"
               << "  [D]                   Toggle dry-run mode on/off\n"
               << "  [L]                   Toggle verbose logging on/off\n"
-              << "  [C]                   Clear telemetry counters\n"
-              << "  [S]                   Display telemetry summary\n";
+              << "  [P] / [Shift+P]       Decrease / Increase target ping (-/+ 5ms)\n"
+              << "  [F] / [Shift+F]       Decrease / Increase min animation lock floor (-/+ 5ms)\n"
+              << "  [M] / [Shift+M]       Decrease / Increase safety margin (-/+ 1ms)\n"
+              << "  [S]                   Save settings to mitigator_config.json\n"
+              << "  [C]                   Clear telemetry counters\n";
 }
 
 /// RAII wrapper for Win32 HANDLE ensuring zero leaks in error or recovery paths (8C)
