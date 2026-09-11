@@ -2,9 +2,6 @@
 
 #include "mitigator/ipc_protocol.hpp"
 #include "mitigator/config_manager.hpp"
-#include <ftxui/dom/elements.hpp>
-#include <ftxui/screen/screen.hpp>
-#include <ftxui/component/component.hpp>
 
 #include <string>
 #include <string_view>
@@ -60,11 +57,11 @@ struct GuardCounters {
 };
 
 /**
- * @brief Reactive 3-tab terminal dashboard and telemetry renderer powered by FTXUI.
+ * @brief High-performance, zero-dependency ANSI/TrueColor terminal dashboard and telemetry renderer.
  *
  * Provides:
  * - Tab 1: Live Combat Stream, KPI gauges, and hero status banner.
- * - Tab 2: Latency Analytics with real-time 60-sample sparkline waveform graph.
+ * - Tab 2: Latency Analytics with real-time 60-sample Unicode sparkline waveform graph.
  * - Tab 3: Interactive Settings & Safety Controls (persisted to disk).
  */
 class UiRenderer {
@@ -136,26 +133,11 @@ public:
     void reset_stats();
 
     // -------------------------------------------------------------------------
-    // FTXUI DOM & Component Builders
+    // Dashboard Tab & Snapshot Methods
     // -------------------------------------------------------------------------
 
-    /// Builds the top hero banner DOM element
-    [[nodiscard]] ftxui::Element build_hero_banner() const;
-
-    /// Builds Tab 1: Live Combat Stream DOM element
-    [[nodiscard]] ftxui::Element build_tab_live_combat() const;
-
-    /// Builds Tab 2: Latency Analytics & Waveform DOM element
-    [[nodiscard]] ftxui::Element build_tab_latency_analytics() const;
-
-    /// Builds the complete dashboard DOM document for a given width and height
-    [[nodiscard]] ftxui::Element build_dashboard_document() const;
-
-    /// Renders the current dashboard DOM to a string screen buffer for tests & headless captures
+    /// Renders the current dashboard to a string buffer for tests & headless captures
     [[nodiscard]] std::string render_snapshot_to_string(int width = 100, int height = 30) const;
-
-    /// Creates the interactive FTXUI root component with tabs, sliders, and buttons
-    [[nodiscard]] ftxui::Component create_interactive_component();
 
     // Tab selection management
     [[nodiscard]] int active_tab() const;
@@ -190,6 +172,7 @@ public:
     [[nodiscard]] static std::string format_time_hhmmss(std::chrono::seconds total_secs);
     [[nodiscard]] static std::string current_time_hhmmss();
     [[nodiscard]] static std::string format_action_line(const ActionLogEntry& entry);
+    [[nodiscard]] static std::string render_sparkline_bar(const std::vector<float>& samples, size_t width);
 
 private:
     void record_action_internal(const ipc::TelemetryPayload& t);
@@ -220,17 +203,13 @@ private:
     size_t m_cols{DEFAULT_DASHBOARD_WIDTH};
     size_t m_rows{DEFAULT_DASHBOARD_ROWS};
 
-    // FTXUI state
+    // Tab state
     int m_active_tab{0};
     MitigationConfig m_config{ConfigManager::default_config()};
     std::function<void(const MitigationConfig&)> m_on_config_changed;
     std::function<void()> m_on_reset_stats;
     std::string m_settings_feedback;
-
-    // Interactive slider bindings
-    int m_slider_min_lock{25};
-    int m_slider_target_ping{15};
-    int m_slider_margin{0};
 };
 
 } // namespace mitigator::loader
+

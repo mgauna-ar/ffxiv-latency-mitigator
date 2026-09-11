@@ -407,6 +407,48 @@ int main(int argc, char* argv[]) {
                         ui.set_connection_status("Configuration saved to mitigator_config.json");
                         ui.render_dashboard(dry_run, verbose);
                         break;
+                    case 'f': {
+                        auto cfg = ui.config();
+                        cfg.min_animation_lock_ms = (std::max)(10.0, cfg.min_animation_lock_ms - 5.0);
+                        ui.set_config(cfg);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'F': {
+                        auto cfg = ui.config();
+                        cfg.min_animation_lock_ms = (std::min)(100.0, cfg.min_animation_lock_ms + 5.0);
+                        ui.set_config(cfg);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'p': {
+                        auto cfg = ui.config();
+                        cfg.target_ping_ms = (std::max)(5.0, cfg.target_ping_ms - 5.0);
+                        ui.set_config(cfg);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'P': {
+                        auto cfg = ui.config();
+                        cfg.target_ping_ms = (std::min)(100.0, cfg.target_ping_ms + 5.0);
+                        ui.set_config(cfg);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'm': {
+                        auto cfg = ui.config();
+                        cfg.safety_margin_ms = (std::max)(0.0, cfg.safety_margin_ms - 1.0);
+                        ui.set_config(cfg);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'M': {
+                        auto cfg = ui.config();
+                        cfg.safety_margin_ms = (std::min)(20.0, cfg.safety_margin_ms + 1.0);
+                        ui.set_config(cfg);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
                     default:
                         break;
                 }
@@ -689,6 +731,56 @@ int main(int argc, char* argv[]) {
                             ui.log_status("Saved settings to mitigator_config.json");
                         }
                         break;
+                    case 'f': {
+                        auto cfg = ui.config();
+                        cfg.min_animation_lock_ms = (std::max)(10.0, cfg.min_animation_lock_ms - 5.0);
+                        ui.set_config(cfg);
+                        min_lock_ms = cfg.min_animation_lock_ms;
+                        ipc_server.set_min_lock(static_cast<float>(min_lock_ms));
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'F': {
+                        auto cfg = ui.config();
+                        cfg.min_animation_lock_ms = (std::min)(100.0, cfg.min_animation_lock_ms + 5.0);
+                        ui.set_config(cfg);
+                        min_lock_ms = cfg.min_animation_lock_ms;
+                        ipc_server.set_min_lock(static_cast<float>(min_lock_ms));
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'p': {
+                        auto cfg = ui.config();
+                        cfg.target_ping_ms = (std::max)(5.0, cfg.target_ping_ms - 5.0);
+                        ui.set_config(cfg);
+                        target_ping_ms = cfg.target_ping_ms;
+                        ipc_server.set_target_ping(static_cast<float>(target_ping_ms));
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'P': {
+                        auto cfg = ui.config();
+                        cfg.target_ping_ms = (std::min)(100.0, cfg.target_ping_ms + 5.0);
+                        ui.set_config(cfg);
+                        target_ping_ms = cfg.target_ping_ms;
+                        ipc_server.set_target_ping(static_cast<float>(target_ping_ms));
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'm': {
+                        auto cfg = ui.config();
+                        cfg.safety_margin_ms = (std::max)(0.0, cfg.safety_margin_ms - 1.0);
+                        ui.set_config(cfg);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
+                    case 'M': {
+                        auto cfg = ui.config();
+                        cfg.safety_margin_ms = (std::min)(20.0, cfg.safety_margin_ms + 1.0);
+                        ui.set_config(cfg);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    }
                     default:
                         break;
                 }

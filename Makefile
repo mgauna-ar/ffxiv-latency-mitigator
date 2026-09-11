@@ -1,5 +1,5 @@
 CXX ?= clang++
-CXXFLAGS ?= -std=c++20 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc -Itests -Isrc/third_party/ftxui/include -Isrc/third_party/ftxui/src
+CXXFLAGS ?= -std=c++20 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc -Itests
 
 SRCS = \
 	src/core/rolling_rtt.cpp \
@@ -20,18 +20,18 @@ SRCS = \
 	tests/test_ui_renderer.cpp \
 	tests/test_config_manager.cpp
 
-LIBS = libftxui.a
 BIN = test_runner
 
 .PHONY: all test clean
 
 all: $(BIN)
 
-$(BIN): $(SRCS) $(LIBS)
-	$(CXX) $(CXXFLAGS) $(SRCS) $(LIBS) -o $(BIN)
+$(BIN): $(SRCS)
+	$(CXX) $(CXXFLAGS) $(SRCS) -o $(BIN)
 
 test: $(BIN)
 	./$(BIN)
 
 clean:
 	rm -f $(BIN) test_mitigator_config_temp.json
+

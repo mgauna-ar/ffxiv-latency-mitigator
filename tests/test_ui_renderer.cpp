@@ -345,7 +345,7 @@ TEST_CASE(UiRenderer, FinalSessionReportCard) {
     TEST_ASSERT(report.find("Safety Floor Clamps:") != std::string::npos);
 }
 
-TEST_CASE(UiRenderer, FtxuiTabSwitchingAndAnalyticsTab) {
+TEST_CASE(UiRenderer, TabSwitchingAndAnalyticsTab) {
     mitigator::loader::UiRenderer renderer;
 
     mitigator::ipc::TelemetryPayload t{};
@@ -381,7 +381,7 @@ TEST_CASE(UiRenderer, FtxuiTabSwitchingAndAnalyticsTab) {
     TEST_ASSERT(tab2.find("Min Animation Lock Floor") != std::string::npos);
 }
 
-TEST_CASE(UiRenderer, FtxuiSparklineHistoryRingBuffer) {
+TEST_CASE(UiRenderer, SparklineHistoryRingBuffer) {
     mitigator::loader::UiRenderer renderer;
 
     for (int i = 1; i <= 70; ++i) {
@@ -398,12 +398,14 @@ TEST_CASE(UiRenderer, FtxuiSparklineHistoryRingBuffer) {
     TEST_ASSERT(history.size() == mitigator::loader::UiRenderer::SPARKLINE_HISTORY_CAPACITY);
     TEST_ASSERT_NEAR(history.front(), 11.0f, 0.01f);
     TEST_ASSERT_NEAR(history.back(), 70.0f, 0.01f);
+
+    // Test Unicode sparkline rendering helper
+    std::string sparkline = mitigator::loader::UiRenderer::render_sparkline_bar(history, 60);
+    TEST_ASSERT(!sparkline.empty());
 }
 
-TEST_CASE(UiRenderer, FtxuiInteractiveComponentCreation) {
+TEST_CASE(UiRenderer, SettingsAndConfigurationCallbacks) {
     mitigator::loader::UiRenderer renderer;
-    auto root = renderer.create_interactive_component();
-    TEST_ASSERT(root != nullptr);
 
     bool config_callback_called = false;
     renderer.set_on_config_changed([&](const mitigator::MitigationConfig&) {
@@ -414,4 +416,6 @@ TEST_CASE(UiRenderer, FtxuiInteractiveComponentCreation) {
     cfg.min_animation_lock_ms = 40.0;
     renderer.set_config(cfg);
     TEST_ASSERT_NEAR(renderer.config().min_animation_lock_ms, 40.0, 0.01);
+    TEST_ASSERT(config_callback_called);
 }
+
