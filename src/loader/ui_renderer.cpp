@@ -142,9 +142,13 @@ std::string UiRenderer::connection_status() const {
 
 void UiRenderer::set_terminal_dimensions(size_t cols, size_t rows) {
     std::lock_guard<std::recursive_mutex> lock(m_render_mutex);
-    m_cols = std::max(cols, MIN_DASHBOARD_WIDTH);
-    m_rows = std::max(rows, MIN_DASHBOARD_ROWS);
-    m_dirty = true;
+    const size_t new_cols = std::max(cols, MIN_DASHBOARD_WIDTH);
+    const size_t new_rows = std::max(rows, MIN_DASHBOARD_ROWS);
+    if (new_cols != m_cols || new_rows != m_rows) {
+        m_cols = new_cols;
+        m_rows = new_rows;
+        m_dirty = true;
+    }
 }
 
 size_t UiRenderer::terminal_cols() const {
@@ -431,17 +435,18 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
     const size_t rows = std::max(static_cast<size_t>(height), MIN_DASHBOARD_ROWS);
     const size_t inner_w = cols - 2;
 
-    std::ostringstream doc;
+    std::vector<std::string> lines;
+    lines.reserve(rows);
 
-    // Top border
-    doc << box_top_line(cols) << "\033[K\n";
+    // 1. Top border
+    lines.push_back(box_top_line(cols));
 
-    // Hero title banner
+    // 2. Hero title banner
     const std::string header_title = std::string(color::TITLE) + color::BOLD +
         "⚡ FFXIV STANDALONE LATENCY MITIGATOR (C++20) — LIVE COMBAT DASHBOARD" + color::RESET;
-    doc << make_box_row(header_title, inner_w) << "\033[K\n";
+    lines.push_back(make_box_row(header_title, inner_w));
 
-    // Target process metadata
+    // 3. Target process metadata
     std::ostringstream meta_ss;
     if (m_pid == 0) {
         meta_ss << color::MUTED << "Target: " << color::TARGET << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
@@ -453,12 +458,12 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                 << color::MUTED << " │ Detours: " << color::MINT << m_hook_count << "/" << game::definitions::TOTAL_AVAILABLE_HOOKS << " Active" << color::RESET
                 << color::MUTED << " │ Mode: " << (m_dry_run ? std::string(color::PURPLE) + "DRY-RUN" : std::string(color::MINT) + "ACTIVE") << color::RESET;
     }
-    doc << make_box_row(meta_ss.str(), inner_w) << "\033[K\n";
+    lines.push_back(make_box_row(meta_ss.str(), inner_w));
 
-    // Separator to Tab bar
-    doc << box_separator_line(cols) << "\033[K\n";
+    // 4. Separator to Tab bar
+    lines.push_back(box_separator_line(cols));
 
-    // 3-Tab selector bar
+    // 5. 3-Tab selector bar
     std::ostringstream tab_ss;
     auto make_tab = [&](int idx, std::string_view label, std::string_view num) {
         if (m_active_tab == idx) {
@@ -472,12 +477,12 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
            << make_tab(1, "Latency Analytics", "2")
            << color::BORDER << "│" << color::RESET << " "
            << make_tab(2, "Settings & Safety", "3");
-    doc << make_box_row(tab_ss.str(), inner_w) << "\033[K\n";
+    lines.push_back(make_box_row(tab_ss.str(), inner_w));
 
-    // Separator to KPI block
-    doc << box_separator_line(cols) << "\033[K\n";
+    // 6. Separator to KPI block
+    lines.push_back(box_separator_line(cols));
 
-    // KPI Row 1: Network & Latency
+    // 7. KPI Row 1: Network & Latency
     const char* quality_color = color::MUTED;
     const char* quality_str = get_quality_tier(
         (m_total_actions > 0) ? m_last_smoothed_rtt : 0.0f,
@@ -496,9 +501,9 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
          << " │ Target: " << color::TEXT << std::fixed << std::setprecision(0) << m_target_ping_ms << "ms"
          << color::MUTED << " │ RTT Med/P95/Max: " << color::TEXT << std::fixed << std::setprecision(0)
          << rtt_dist.median_val << "/" << rtt_dist.p95_val << "/" << rtt_dist.max_val << "ms" << color::RESET;
-    doc << make_box_row(kpi1.str(), inner_w) << "\033[K\n";
+    lines.push_back(make_box_row(kpi1.str(), inner_w));
 
-    // KPI Row 2: Mitigation & Throughput
+    // 8. KPI Row 2: Mitigation & Throughput
     const float mit_ratio = (m_total_actions > 0) ?
         static_cast<float>(m_actions_mitigated) / static_cast<float>(m_total_actions) : 0.0f;
     const std::string mit_bar = make_bar(mit_ratio, 1.0f, 8, color::MINT);
@@ -514,9 +519,9 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
          << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
          << color::MUTED << " (Avg: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::MUTED << ")"
          << " │ Total Actions: " << color::TEXT << m_total_actions << color::RESET;
-    doc << make_box_row(kpi2.str(), inner_w) << "\033[K\n";
+    lines.push_back(make_box_row(kpi2.str(), inner_w));
 
-    // KPI Row 3: Pacing & Guards
+    // 9. KPI Row 3: Pacing & Guards
     const auto now = std::chrono::steady_clock::now();
     const auto elapsed_secs = (m_session_start_time != std::chrono::steady_clock::time_point{}) ?
         std::chrono::duration_cast<std::chrono::seconds>(now - m_session_start_time) :
@@ -531,19 +536,18 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
          << color::MUTED << " │ Spike: " << color::CORAL << m_guards.spike_filtered << color::RESET
          << color::MUTED << " │ Cold: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
          << color::MUTED << " │ Cast: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
-    doc << make_box_row(kpi3.str(), inner_w) << "\033[K\n";
+    lines.push_back(make_box_row(kpi3.str(), inner_w));
 
-    // Separator to Active Tab View
-    doc << box_separator_line(cols) << "\033[K\n";
+    // 10. Separator to Active Tab View
+    lines.push_back(box_separator_line(cols));
 
-    size_t content_rows_used = 0;
+    const size_t max_content_lines = (rows > 13) ? (rows - 13) : 5;
 
     // -------------------------------------------------------------------------
     // TAB 0: LIVE COMBAT ACTION STREAM
     // -------------------------------------------------------------------------
     if (m_active_tab == 0) {
-        doc << make_box_row(std::string(color::BOLD) + color::TITLE + "LIVE COMBAT ACTION STREAM" + color::RESET, inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(std::string(color::BOLD) + color::TITLE + "LIVE COMBAT ACTION STREAM" + color::RESET, inner_w));
 
         std::ostringstream tbl_hdr;
         if (inner_w >= 90) {
@@ -555,20 +559,17 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                     << "TIME    │#SEQ │ACTION│LOCK BEFORE->AFTER│SAVED  │RTT (SMOOTH)│STATUS"
                     << color::RESET;
         }
-        doc << make_box_row(tbl_hdr.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(tbl_hdr.str(), inner_w));
 
-        const size_t display_rows = (rows > 18) ? std::clamp<size_t>(rows - 18, 6, RING_BUFFER_CAPACITY) : 6;
+        const size_t display_rows = (max_content_lines > 2) ? (max_content_lines - 2) : 1;
         const size_t entries_count = m_action_ring_buffer.size();
         const size_t display_count = (std::min)(entries_count, display_rows);
         const size_t start_idx = entries_count > display_rows ? (entries_count - display_rows) : 0;
 
         if (entries_count == 0) {
-            doc << make_box_row(std::string(color::MUTED) + "Waiting for combat actions... (Cast spells or weaponskills in game)" + color::RESET, inner_w) << "\033[K\n";
-            content_rows_used++;
+            lines.push_back(make_box_row(std::string(color::MUTED) + "Waiting for combat actions... (Cast spells or weaponskills in game)" + color::RESET, inner_w));
             for (size_t i = 1; i < display_rows; ++i) {
-                doc << make_box_row("", inner_w) << "\033[K\n";
-                content_rows_used++;
+                lines.push_back(make_box_row("", inner_w));
             }
         } else {
             for (size_t i = 0; i < display_rows; ++i) {
@@ -618,11 +619,10 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                     if (entry.cold_start_guard) tags += std::string(color::ACCENT) + "[COLD] ";
 
                     row_ss << tags << color::RESET;
-                    doc << make_box_row(row_ss.str(), inner_w) << "\033[K\n";
+                    lines.push_back(make_box_row(row_ss.str(), inner_w));
                 } else {
-                    doc << make_box_row("", inner_w) << "\033[K\n";
+                    lines.push_back(make_box_row("", inner_w));
                 }
-                content_rows_used++;
             }
         }
     }
@@ -630,23 +630,17 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
     // TAB 1: LATENCY ANALYTICS & WAVEFORM
     // -------------------------------------------------------------------------
     else if (m_active_tab == 1) {
-        doc << make_box_row(std::string(color::BOLD) + color::TITLE + "REAL-TIME LATENCY WAVEFORM (Last 60 Actions)" + color::RESET, inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(std::string(color::BOLD) + color::TITLE + "REAL-TIME LATENCY WAVEFORM (Last 60 Actions)" + color::RESET, inner_w));
 
         std::vector<float> hist(m_rtt_history.begin(), m_rtt_history.end());
         const size_t sparkline_width = (inner_w >= 30) ? std::min<size_t>(inner_w - 20, SPARKLINE_HISTORY_CAPACITY) : 20;
 
         if (hist.empty()) {
-            doc << make_box_row(std::string(color::MUTED) + "  No latency samples collected yet. Awaiting action responses from game." + color::RESET, inner_w) << "\033[K\n";
-            content_rows_used++;
+            lines.push_back(make_box_row(std::string(color::MUTED) + "  No latency samples collected yet. Awaiting action responses from game." + color::RESET, inner_w));
+            lines.push_back(make_box_row("", inner_w));
+            lines.push_back(make_box_row("", inner_w));
+            lines.push_back(make_box_row("", inner_w));
         } else {
-            // Waveform visual chart
-            float max_rtt = 150.0f;
-            for (float val : hist) {
-                if (val > max_rtt) max_rtt = val;
-            }
-
-
             // Row 3: 150ms+
             std::string row3 = "  150ms+ ┤ ";
             for (size_t i = (hist.size() > sparkline_width ? hist.size() - sparkline_width : 0); i < hist.size(); ++i) {
@@ -654,8 +648,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                 else if (hist[i] >= 120.0f) row3 += std::string(color::AMBER) + "▆" + color::RESET;
                 else row3 += " ";
             }
-            doc << make_box_row(row3, inner_w) << "\033[K\n";
-            content_rows_used++;
+            lines.push_back(make_box_row(row3, inner_w));
 
             // Row 2: 80ms - 150ms
             std::string row2 = "   80ms  ┤ ";
@@ -664,8 +657,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                 else if (hist[i] >= 60.0f) row2 += std::string(color::MINT) + "▄" + color::RESET;
                 else row2 += " ";
             }
-            doc << make_box_row(row2, inner_w) << "\033[K\n";
-            content_rows_used++;
+            lines.push_back(make_box_row(row2, inner_w));
 
             // Row 1: 30ms - 80ms
             std::string row1 = "   30ms  ┤ ";
@@ -673,20 +665,17 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                 if (hist[i] >= 30.0f) row1 += std::string(color::MINT) + "█" + color::RESET;
                 else row1 += std::string(color::MINT) + "▂" + color::RESET;
             }
-            doc << make_box_row(row1, inner_w) << "\033[K\n";
-            content_rows_used++;
+            lines.push_back(make_box_row(row1, inner_w));
 
             // Sparkline bar line
             std::string sparkline_row = "  Waveform: " + render_sparkline_bar(hist, sparkline_width);
-            doc << make_box_row(sparkline_row, inner_w) << "\033[K\n";
-            content_rows_used++;
+            lines.push_back(make_box_row(sparkline_row, inner_w));
         }
 
-        doc << box_separator_line(cols) << "\033[K\n";
+        lines.push_back(box_separator_line(cols));
 
         // Section: Latency Percentiles
-        doc << make_box_row(std::string(color::BOLD) + color::TITLE + "LATENCY PERCENTILES" + color::RESET, inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(std::string(color::BOLD) + color::TITLE + "LATENCY PERCENTILES" + color::RESET, inner_w));
 
         std::ostringstream p_ss;
         p_ss << "  Min: " << color::TEXT << std::fixed << std::setprecision(1) << rtt_dist.min_val << "ms" << color::RESET
@@ -695,14 +684,12 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
              << " │ Max: " << color::TEXT << rtt_dist.max_val << "ms" << color::RESET
              << " │ Jitter: " << color::TEXT << "±" << m_last_jitter << "ms" << color::RESET
              << " │ Quality: " << quality_color << quality_str << color::RESET;
-        doc << make_box_row(p_ss.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(p_ss.str(), inner_w));
 
-        doc << box_separator_line(cols) << "\033[K\n";
+        lines.push_back(box_separator_line(cols));
 
         // Section: Time Saved Summary
-        doc << make_box_row(std::string(color::BOLD) + color::TITLE + "TIME SAVED SUMMARY" + color::RESET, inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(std::string(color::BOLD) + color::TITLE + "TIME SAVED SUMMARY" + color::RESET, inner_w));
 
         auto saved_dist = compute_distribution(m_delay_saved_samples);
         std::ostringstream s_ss;
@@ -711,94 +698,79 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
              << " │ Avg Reduction: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::RESET
              << " │ Saved P95: " << color::TEXT << saved_dist.p95_val << "ms" << color::RESET
              << " │ Saved Max: " << color::TEXT << saved_dist.max_val << "ms" << color::RESET;
-        doc << make_box_row(s_ss.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(s_ss.str(), inner_w));
 
-        doc << box_separator_line(cols) << "\033[K\n";
+        lines.push_back(box_separator_line(cols));
 
         // Section: Safety & Guards
-        doc << make_box_row(std::string(color::BOLD) + color::TITLE + "SAFETY & GUARDS" + color::RESET, inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(std::string(color::BOLD) + color::TITLE + "SAFETY & GUARDS" + color::RESET, inner_w));
 
         std::ostringstream g_ss;
         g_ss << "  Floor Clamps: " << color::AMBER << m_guards.floor_clamps << color::RESET
              << " │ Spike Filtered: " << color::CORAL << m_guards.spike_filtered << color::RESET
              << " │ Cold-Start Guards: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
              << " │ Cast-Locks Preserved: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
-        doc << make_box_row(g_ss.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(g_ss.str(), inner_w));
     }
     // -------------------------------------------------------------------------
     // TAB 2: INTERACTIVE SETTINGS & CONFIGURATION
     // -------------------------------------------------------------------------
     else if (m_active_tab == 2) {
-        doc << make_box_row(std::string(color::BOLD) + color::TITLE + "INTERACTIVE SETTINGS & CONFIGURATION" + color::RESET, inner_w) << "\033[K\n";
-        content_rows_used++;
-
-        doc << make_box_row("  Settings are automatically read from and saved to mitigator_config.json.", inner_w) << "\033[K\n";
-        content_rows_used++;
-
-        doc << box_separator_line(cols) << "\033[K\n";
+        lines.push_back(make_box_row(std::string(color::BOLD) + color::TITLE + "INTERACTIVE SETTINGS & CONFIGURATION" + color::RESET, inner_w));
+        lines.push_back(make_box_row("  Settings are automatically read from and saved to mitigator_config.json.", inner_w));
+        lines.push_back(box_separator_line(cols));
 
         std::ostringstream cfg1;
         cfg1 << "  Min Animation Lock Floor : [" << color::BOLD << color::TEXT << std::setw(5) << std::fixed << std::setprecision(1)
              << m_config.min_animation_lock_ms << " ms" << color::RESET << "]"
              << color::MUTED << "  (Hotkeys: [F] -5ms  /  [Shift+F] +5ms)" << color::RESET;
-        doc << make_box_row(cfg1.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(cfg1.str(), inner_w));
 
         std::ostringstream cfg2;
         cfg2 << "  Simulated Target Ping    : [" << color::BOLD << color::TEXT << std::setw(5) << std::fixed << std::setprecision(1)
              << m_config.target_ping_ms << " ms" << color::RESET << "]"
              << color::MUTED << "  (Hotkeys: [P] -5ms  /  [Shift+P] +5ms)" << color::RESET;
-        doc << make_box_row(cfg2.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(cfg2.str(), inner_w));
 
         std::ostringstream cfg3;
         cfg3 << "  Mitigation Safety Margin : [" << color::BOLD << color::TEXT << std::setw(5) << std::fixed << std::setprecision(1)
              << m_config.safety_margin_ms << " ms" << color::RESET << "]"
              << color::MUTED << "  (Hotkeys: [M] -1ms  /  [Shift+M] +1ms)" << color::RESET;
-        doc << make_box_row(cfg3.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(cfg3.str(), inner_w));
 
         std::ostringstream cfg4;
         cfg4 << "  Operating Mode           : [" << (m_dry_run ? std::string(color::PURPLE) + "DRY-RUN (Monitoring Only)" : std::string(color::MINT) + "ACTIVE (Live Animation Lock Mitigation)") << color::RESET << "]"
              << color::MUTED << "  (Hotkey: [D] Toggle)" << color::RESET;
-        doc << make_box_row(cfg4.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(cfg4.str(), inner_w));
 
         std::ostringstream cfg5;
         cfg5 << "  Logging Verbosity        : [" << (m_config.verbose ? std::string(color::ACCENT) + "VERBOSE (All Actions)" : std::string(color::MUTED) + "CONCISE (Mitigations Only)") << color::RESET << "]"
              << color::MUTED << "  (Hotkey: [L] Toggle)" << color::RESET;
-        doc << make_box_row(cfg5.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(cfg5.str(), inner_w));
 
-        doc << box_separator_line(cols) << "\033[K\n";
+        lines.push_back(box_separator_line(cols));
 
         std::ostringstream cfg6;
         cfg6 << "  Configuration Persistence: " << color::TARGET << ConfigManager::DEFAULT_CONFIG_FILENAME << color::RESET
              << color::MUTED << "  (Hotkey: [S] Save configuration immediately)" << color::RESET;
-        doc << make_box_row(cfg6.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(cfg6.str(), inner_w));
 
         std::ostringstream cfg7;
         cfg7 << "  Telemetry Reset          : " << color::MUTED << "Clear counters and statistics (Hotkey: [C])" << color::RESET;
-        doc << make_box_row(cfg7.str(), inner_w) << "\033[K\n";
-        content_rows_used++;
+        lines.push_back(make_box_row(cfg7.str(), inner_w));
     }
 
-    // Fill remaining rows if terminal height allows
-    const size_t target_total_rows = (rows > 20) ? (rows - 4) : rows;
-    const size_t fixed_header_rows = 9;
-    if (content_rows_used + fixed_header_rows < target_total_rows) {
-        size_t pad = target_total_rows - (content_rows_used + fixed_header_rows);
-        for (size_t i = 0; i < pad; ++i) {
-            doc << make_box_row("", inner_w) << "\033[K\n";
+    // Fill remaining rows if terminal height allows, or clamp to guarantee exact row budget
+    if (lines.size() + 3 > rows) {
+        lines.resize(rows - 3);
+    } else {
+        while (lines.size() + 3 < rows) {
+            lines.push_back(make_box_row("", inner_w));
         }
     }
 
     // Bottom Separator
-    doc << box_separator_line(cols) << "\033[K\n";
+    lines.push_back(box_separator_line(cols));
 
     // Bottom hotkey toolbar
     std::ostringstream bar_ss;
@@ -809,10 +781,19 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
            << color::BOLD << "[L]" << color::RESET << color::GRAY << " Verbose │ "
            << color::BOLD << "[S]" << color::RESET << color::GRAY << " Save Settings │ "
            << color::BOLD << "[C]" << color::RESET << color::GRAY << " Reset Stats" << color::RESET;
-    doc << make_box_row(bar_ss.str(), inner_w) << "\033[K\n";
+    lines.push_back(make_box_row(bar_ss.str(), inner_w));
 
     // Bottom border
-    doc << box_bottom_line(cols) << "\033[K\n";
+    lines.push_back(box_bottom_line(cols));
+
+    // Assemble final output buffer: exact line count, no trailing newline on last line to prevent scrolling
+    std::ostringstream doc;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        doc << lines[i] << "\033[K";
+        if (i + 1 < lines.size()) {
+            doc << "\n";
+        }
+    }
 
     return doc.str();
 }
@@ -822,7 +803,7 @@ void UiRenderer::render_dashboard(bool dry_run, bool verbose) {
     (void)verbose;
     std::lock_guard<std::recursive_mutex> lock(m_render_mutex);
     std::string snapshot = render_snapshot_to_string(static_cast<int>(m_cols), static_cast<int>(m_rows));
-    std::cout << color::HIDE_CURSOR << "\033[H" << snapshot << std::flush;
+    std::cout << "\033[?2026h" << color::HIDE_CURSOR << "\033[H" << snapshot << "\033[?2026l" << std::flush;
     m_dirty = false;
 }
 

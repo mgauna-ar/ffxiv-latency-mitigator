@@ -440,4 +440,44 @@ TEST_CASE(UiRenderer, CycleTabNavigation) {
     TEST_ASSERT(renderer.active_tab() == 0);
 }
 
+TEST_CASE(UiRenderer, ExactRowCountBudgetAndNoTrailingNewline) {
+    mitigator::loader::UiRenderer renderer;
+
+    const std::vector<int> test_heights = {24, 25, 30, 45};
+
+    for (int tab = 0; tab < 3; ++tab) {
+        renderer.set_active_tab(tab);
+
+        for (int h : test_heights) {
+            std::string snapshot = renderer.render_snapshot_to_string(100, h);
+
+            // Count lines: number of newlines must be exactly h - 1 (meaning h lines, no trailing \n)
+            size_t newline_count = 0;
+            for (char c : snapshot) {
+                if (c == '\n') {
+                    newline_count++;
+                }
+            }
+
+            TEST_ASSERT(newline_count == static_cast<size_t>(h - 1));
+            TEST_ASSERT(!snapshot.empty());
+            TEST_ASSERT(snapshot.back() != '\n');
+        }
+    }
+}
+
+TEST_CASE(UiRenderer, SynchronizedUpdateModeFrameSwapping) {
+    mitigator::loader::UiRenderer renderer;
+    renderer.set_dashboard_mode(true);
+
+    CoutRedirect redirect;
+    renderer.render_dashboard(false, false);
+    const std::string out = redirect.str();
+
+    // Must bracket the render with mode 2026 for atomic GPU screen buffer presentation
+    TEST_ASSERT(out.find("\033[?2026h") != std::string::npos);
+    TEST_ASSERT(out.find("\033[?2026l") != std::string::npos);
+}
+
+
 

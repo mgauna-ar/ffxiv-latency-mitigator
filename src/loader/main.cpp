@@ -28,7 +28,7 @@ std::atomic<bool> g_keep_running{true};
 
 BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT) {
-        std::cout << "\033[?25h" << std::flush;
+        std::cout << "\033[?1049l\033[?25h" << std::flush;
         g_keep_running = false;
         return TRUE;
     }
@@ -81,10 +81,10 @@ void sync_terminal_dimensions(HANDLE hOut, mitigator::loader::UiRenderer& ui) {
 }
 
 void restore_scrollable_console(HANDLE hOut) {
+    std::cout << "\033[?1049l\033[?25h" << std::flush;
     if (!hOut || hOut == INVALID_HANDLE_VALUE) {
         return;
     }
-    std::cout << "\033[?25h" << std::flush;
 
     CONSOLE_SCREEN_BUFFER_INFO csbi{};
     SHORT cols = 100;
@@ -559,6 +559,7 @@ int main(int argc, char* argv[]) {
     constexpr int MAX_BACKOFF_MS = 8000;
 
     ui.set_dashboard_mode(true);
+    std::cout << "\033[?1049h" << std::flush;
     ui.set_session_info(0, 0, target_ping_ms, dry_run);
     ui.set_connection_status("Searching for " + std::string(mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME) + "...");
     ui.render_dashboard(dry_run, verbose);
@@ -566,9 +567,9 @@ int main(int argc, char* argv[]) {
     while (g_keep_running.load()) {
         ui.set_session_info(0, 0, target_ping_ms, dry_run);
         ui.set_connection_status("Searching for " + std::string(mitigator::game::definitions::DEFAULT_GAME_PROCESS_NAME) + "...");
-        ui.render_dashboard(dry_run, verbose);
 
         auto on_search_tick = [&]() {
+            sync_terminal_dimensions(hOut, ui);
             poll_keyboard_inputs(ui, nullptr, target_ping_ms, min_lock_ms, dry_run, verbose);
         };
 
@@ -775,6 +776,8 @@ int main(int argc, char* argv[]) {
             if (proc_handle && WaitForSingleObject(proc_handle.get(), 0) == WAIT_OBJECT_0) {
                 break;
             }
+
+            sync_terminal_dimensions(hOut, ui);
 
             const auto now = std::chrono::steady_clock::now();
             const auto time_since_render = now - last_dashboard_render;
