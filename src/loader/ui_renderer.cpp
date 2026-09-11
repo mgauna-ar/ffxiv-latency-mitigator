@@ -330,14 +330,17 @@ void UiRenderer::record_action_internal(const ipc::TelemetryPayload& t) {
     }
     m_last_smoothed_rtt = t.smoothed_rtt_ms;
     m_last_jitter = t.jitter_ms;
-    m_rtt_samples.push_back(t.measured_rtt_ms);
-    if (m_rtt_samples.size() > MAX_DISTRIBUTION_SAMPLES) {
-        m_rtt_samples.pop_front();
-    }
 
-    m_rtt_history.push_back(t.measured_rtt_ms);
-    if (m_rtt_history.size() > SPARKLINE_HISTORY_CAPACITY) {
-        m_rtt_history.pop_front();
+    if (t.measured_rtt_ms > 0.0f) {
+        m_rtt_samples.push_back(t.measured_rtt_ms);
+        if (m_rtt_samples.size() > MAX_DISTRIBUTION_SAMPLES) {
+            m_rtt_samples.pop_front();
+        }
+
+        m_rtt_history.push_back(t.measured_rtt_ms);
+        if (m_rtt_history.size() > SPARKLINE_HISTORY_CAPACITY) {
+            m_rtt_history.pop_front();
+        }
     }
 
     if (t.clamped_floor) {
