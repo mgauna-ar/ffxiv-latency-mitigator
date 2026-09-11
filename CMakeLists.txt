@@ -14,6 +14,31 @@ else()
 endif()
 
 # -----------------------------------------------------------------------------
+# Third-Party Dependencies via CMake FetchContent
+# -----------------------------------------------------------------------------
+include(FetchContent)
+
+# 1. FTXUI: Functional Terminal User Interface (C++20)
+set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    ftxui
+    GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+    GIT_TAG v5.0.0
+)
+FetchContent_MakeAvailable(ftxui)
+
+# 2. MinHook: Windows API Hooking Library (Windows native only)
+if(WIN32 OR CYGWIN OR MSYS OR MINGW)
+    FetchContent_Declare(
+        minhook
+        GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
+        GIT_TAG v1.3.3
+    )
+    FetchContent_MakeAvailable(minhook)
+endif()
+
+# -----------------------------------------------------------------------------
 # 1. Core Logic Library (Cross-platform)
 # -----------------------------------------------------------------------------
 add_library(mitigator_core STATIC
@@ -23,6 +48,7 @@ add_library(mitigator_core STATIC
     src/core/animation_lock.cpp
     src/core/ipc_protocol.cpp
     src/core/sigscan.cpp
+    src/core/config_manager.cpp
 )
 
 target_include_directories(mitigator_core PUBLIC
@@ -45,6 +71,7 @@ add_executable(mitigator_tests
     tests/test_ipc_protocol.cpp
     tests/test_sigscan.cpp
     tests/test_ui_renderer.cpp
+    tests/test_config_manager.cpp
 )
 
 target_include_directories(mitigator_tests PRIVATE
@@ -53,7 +80,12 @@ target_include_directories(mitigator_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
 )
 
-target_link_libraries(mitigator_tests PRIVATE mitigator_core)
+target_link_libraries(mitigator_tests PRIVATE
+    mitigator_core
+    ftxui::screen
+    ftxui::dom
+    ftxui::component
+)
 
 add_test(NAME unit_tests COMMAND mitigator_tests)
 
@@ -61,29 +93,11 @@ add_test(NAME unit_tests COMMAND mitigator_tests)
 # 3. Windows Native Targets: Payload DLL & Standalone Loader Executable
 # -----------------------------------------------------------------------------
 if(WIN32 OR CYGWIN OR MSYS OR MINGW)
-    # 3a. MinHook Embedded Library
-    set(MINHOOK_SOURCES
-        src/third_party/minhook/src/buffer.c
-        src/third_party/minhook/src/hook.c
-        src/third_party/minhook/src/trampoline.c
-    )
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-        list(APPEND MINHOOK_SOURCES src/third_party/minhook/src/hde/hde64.c)
-    else()
-        list(APPEND MINHOOK_SOURCES src/third_party/minhook/src/hde/hde32.c)
-    endif()
-
-    add_library(minhook STATIC ${MINHOOK_SOURCES})
-    target_include_directories(minhook PUBLIC src/third_party/minhook/include)
-    if(MSVC)
-        target_compile_options(minhook PRIVATE /W3 /wd4201 /wd4244 /wd4310)
-    endif()
-
     # Ensure both DLL and executable output to the same directory for direct adjacent loading
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
-    # 3b. In-Game Payload DLL
+    # 3a. In-Game Payload DLL
     add_library(mitigator_payload SHARED
         src/payload/dllmain.cpp
         src/payload/game_hooks.cpp
@@ -94,7 +108,6 @@ if(WIN32 OR CYGWIN OR MSYS OR MINGW)
     target_include_directories(mitigator_payload PRIVATE
         include
         src
-        src/third_party/minhook/include
     )
 
     target_link_libraries(mitigator_payload PRIVATE
@@ -102,7 +115,7 @@ if(WIN32 OR CYGWIN OR MSYS OR MINGW)
         minhook
     )
 
-    # 3c. Standalone Console Loader
+    # 3b. Standalone Console Loader
     add_executable(ffxiv-mitigator
         src/loader/main.cpp
         src/loader/process_finder.cpp
@@ -116,5 +129,11 @@ if(WIN32 OR CYGWIN OR MSYS OR MINGW)
         src
     )
 
-    target_link_libraries(ffxiv-mitigator PRIVATE mitigator_core advapi32)
+    target_link_libraries(ffxiv-mitigator PRIVATE
+        mitigator_core
+        ftxui::screen
+        ftxui::dom
+        ftxui::component
+        advapi32
+    )
 endif()

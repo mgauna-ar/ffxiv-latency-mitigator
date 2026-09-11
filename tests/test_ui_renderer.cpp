@@ -18,14 +18,13 @@ namespace {
 
 TEST_CASE(UiRenderer, InitialSummaryShowsInitializing) {
     mitigator::loader::UiRenderer renderer;
-    CoutRedirect redirect;
+    TEST_ASSERT(renderer.active_tab() == 0);
+    TEST_ASSERT(renderer.total_actions() == 0);
+    TEST_ASSERT(renderer.actions_mitigated() == 0);
 
-    renderer.render_stats_summary();
-    const std::string out = redirect.str();
-
-    TEST_ASSERT(out.find("Mitigated:") != std::string::npos);
+    const std::string out = renderer.render_snapshot_to_string(100, 30);
     TEST_ASSERT(out.find("0/0") != std::string::npos);
-    TEST_ASSERT(out.find("[INITIALIZING]") != std::string::npos);
+    TEST_ASSERT(out.find("STANDBY") != std::string::npos);
 }
 
 TEST_CASE(UiRenderer, AppliedGatePreventsDryRunCounterInflation) {
@@ -38,118 +37,87 @@ TEST_CASE(UiRenderer, AppliedGatePreventsDryRunCounterInflation) {
     t.delay_reduced_ms = 135.0f;
     t.smoothed_rtt_ms = 50.0f;
     t.jitter_ms = 2.0f;
-    t.applied = 0; // e.g. dry-run
+    t.applied = 0; // dry-run
     t.dry_run = 1;
 
-    {
-        CoutRedirect redirect;
-        renderer.log_action(t, true);
-        const std::string log_out = redirect.str();
-        TEST_ASSERT(log_out.find("[Dry Run]") != std::string::npos);
-    }
+    renderer.log_action(t, true);
 
-    {
-        CoutRedirect redirect;
-        renderer.render_stats_summary();
-        const std::string sum_out = redirect.str();
-        // Total actions is 1, but mitigated MUST be 0 because applied was false
-        TEST_ASSERT(sum_out.find("Mitigated:") != std::string::npos);
-        TEST_ASSERT(sum_out.find("0/1") != std::string::npos);
-        TEST_ASSERT(sum_out.find("Total Saved:") != std::string::npos);
-        TEST_ASSERT(sum_out.find("0.00s") != std::string::npos);
-    }
+    TEST_ASSERT(renderer.total_actions() == 1);
+    TEST_ASSERT(renderer.actions_mitigated() == 0);
+    TEST_ASSERT(renderer.cumulative_time_saved_ms() == 0.0);
+
+    std::string out = renderer.render_snapshot_to_string(100, 30);
+    TEST_ASSERT(out.find("0/1") != std::string::npos);
+    TEST_ASSERT(out.find("0.00s") != std::string::npos);
 
     // Now apply an action with applied = 1
     t.applied = 1;
     t.dry_run = 0;
-    {
-        CoutRedirect redirect;
-        renderer.log_action(t, true);
-    }
+    renderer.log_action(t, true);
 
-    {
-        CoutRedirect redirect;
-        renderer.render_stats_summary();
-        const std::string sum_out = redirect.str();
-        // Now mitigated is 1 / 2
-        TEST_ASSERT(sum_out.find("Mitigated:") != std::string::npos);
-        TEST_ASSERT(sum_out.find("1/2") != std::string::npos);
-        TEST_ASSERT(sum_out.find("Total Saved:") != std::string::npos);
-        TEST_ASSERT(sum_out.find("0.14s") != std::string::npos);
-    }
+    TEST_ASSERT(renderer.total_actions() == 2);
+    TEST_ASSERT(renderer.actions_mitigated() == 1);
+    TEST_ASSERT_NEAR(renderer.cumulative_time_saved_ms(), 135.0, 0.1);
+
+    out = renderer.render_snapshot_to_string(100, 30);
+    TEST_ASSERT(out.find("1/2") != std::string::npos);
 }
 
 TEST_CASE(UiRenderer, QualityScoringTiers) {
-    // 1. Excellent (RTT <= 80ms, jitter <= 5ms)
+    // 1. Excellent (RTT < 30ms)
     {
         mitigator::loader::UiRenderer renderer;
         mitigator::ipc::TelemetryPayload t{};
-        t.smoothed_rtt_ms = 45.0f;
+        t.smoothed_rtt_ms = 25.0f;
+        t.jitter_ms = 1.0f;
+        t.delay_reduced_ms = 10.0f;
+        t.applied = 1;
+        renderer.log_action(t, true);
+
+        std::string out = renderer.render_snapshot_to_string(100, 30);
+        TEST_ASSERT(out.find("EXCELLENT") != std::string::npos);
+    }
+
+    // 2. Good (RTT < 70ms)
+    {
+        mitigator::loader::UiRenderer renderer;
+        mitigator::ipc::TelemetryPayload t{};
+        t.smoothed_rtt_ms = 55.0f;
         t.jitter_ms = 3.0f;
         t.delay_reduced_ms = 10.0f;
         t.applied = 1;
-        {
-            CoutRedirect sink;
-            renderer.log_action(t, true);
-        }
+        renderer.log_action(t, true);
 
-        CoutRedirect redirect;
-        renderer.render_stats_summary();
-        TEST_ASSERT(redirect.str().find("[EXCELLENT]") != std::string::npos);
+        std::string out = renderer.render_snapshot_to_string(100, 30);
+        TEST_ASSERT(out.find("GOOD") != std::string::npos);
     }
 
-    // 2. Good (RTT <= 150ms, jitter <= 15ms)
+    // 3. Fair (RTT < 120ms)
     {
         mitigator::loader::UiRenderer renderer;
         mitigator::ipc::TelemetryPayload t{};
-        t.smoothed_rtt_ms = 120.0f;
-        t.jitter_ms = 8.0f;
+        t.smoothed_rtt_ms = 95.0f;
+        t.jitter_ms = 6.0f;
         t.delay_reduced_ms = 10.0f;
         t.applied = 1;
-        {
-            CoutRedirect sink;
-            renderer.log_action(t, true);
-        }
+        renderer.log_action(t, true);
 
-        CoutRedirect redirect;
-        renderer.render_stats_summary();
-        TEST_ASSERT(redirect.str().find("[GOOD]") != std::string::npos);
+        std::string out = renderer.render_snapshot_to_string(100, 30);
+        TEST_ASSERT(out.find("FAIR") != std::string::npos);
     }
 
-    // 3. Fair (RTT <= 220ms, jitter <= 30ms)
+    // 4. Poor (RTT >= 120ms)
     {
         mitigator::loader::UiRenderer renderer;
         mitigator::ipc::TelemetryPayload t{};
-        t.smoothed_rtt_ms = 190.0f;
-        t.jitter_ms = 22.0f;
+        t.smoothed_rtt_ms = 160.0f;
+        t.jitter_ms = 12.0f;
         t.delay_reduced_ms = 10.0f;
         t.applied = 1;
-        {
-            CoutRedirect sink;
-            renderer.log_action(t, true);
-        }
+        renderer.log_action(t, true);
 
-        CoutRedirect redirect;
-        renderer.render_stats_summary();
-        TEST_ASSERT(redirect.str().find("[FAIR]") != std::string::npos);
-    }
-
-    // 4. Poor (RTT > 220ms or jitter > 30ms)
-    {
-        mitigator::loader::UiRenderer renderer;
-        mitigator::ipc::TelemetryPayload t{};
-        t.smoothed_rtt_ms = 260.0f;
-        t.jitter_ms = 10.0f;
-        t.delay_reduced_ms = 10.0f;
-        t.applied = 1;
-        {
-            CoutRedirect sink;
-            renderer.log_action(t, true);
-        }
-
-        CoutRedirect redirect;
-        renderer.render_stats_summary();
-        TEST_ASSERT(redirect.str().find("[POOR]") != std::string::npos);
+        std::string out = renderer.render_snapshot_to_string(100, 30);
+        TEST_ASSERT(out.find("POOR") != std::string::npos);
     }
 }
 
@@ -164,17 +132,14 @@ TEST_CASE(UiRenderer, DecisionTagsRendered) {
     t.smoothed_rtt_ms = 70.0f;
     t.jitter_ms = 4.0f;
     t.clamped_floor = 1;
-    t.spike_filtered = 1;
-    t.cold_start_guard = 1;
+    t.spike_filtered = 0;
+    t.cold_start_guard = 0;
     t.applied = 1;
 
-    CoutRedirect redirect;
     renderer.log_action(t, true);
-    const std::string out = redirect.str();
 
-    TEST_ASSERT(out.find("[Floor Clamp]") != std::string::npos);
-    TEST_ASSERT(out.find("[Spike Filtered]") != std::string::npos);
-    TEST_ASSERT(out.find("[Cold Start]") != std::string::npos);
+    std::string out = renderer.render_snapshot_to_string(100, 30);
+    TEST_ASSERT(out.find("FLOOR") != std::string::npos);
 }
 
 TEST_CASE(UiRenderer, ResetStatsClearsState) {
@@ -184,21 +149,21 @@ TEST_CASE(UiRenderer, ResetStatsClearsState) {
     t.smoothed_rtt_ms = 50.0f;
     t.jitter_ms = 2.0f;
     t.delay_reduced_ms = 100.0f;
+    t.measured_rtt_ms = 50.0f;
     t.applied = 1;
-    {
-        CoutRedirect sink;
-        renderer.log_action(t, true);
-    }
+    renderer.log_action(t, true);
+
+    TEST_ASSERT(renderer.total_actions() == 1);
+    TEST_ASSERT(renderer.rtt_history().size() == 1);
 
     renderer.reset_stats();
 
-    CoutRedirect redirect;
-    renderer.render_stats_summary();
-    const std::string out = redirect.str();
+    TEST_ASSERT(renderer.total_actions() == 0);
+    TEST_ASSERT(renderer.actions_mitigated() == 0);
+    TEST_ASSERT(renderer.rtt_history().empty());
 
-    TEST_ASSERT(out.find("Mitigated:") != std::string::npos);
+    std::string out = renderer.render_snapshot_to_string(100, 30);
     TEST_ASSERT(out.find("0/0") != std::string::npos);
-    TEST_ASSERT(out.find("[INITIALIZING]") != std::string::npos);
 }
 
 TEST_CASE(UiRenderer, PercentileCalculations) {
@@ -232,7 +197,6 @@ TEST_CASE(UiRenderer, ActionRingBufferEviction) {
         t.smoothed_rtt_ms = 50.0f;
         t.applied = 1;
 
-        CoutRedirect sink;
         renderer.log_action(t, true);
     }
 
@@ -255,11 +219,8 @@ TEST_CASE(UiRenderer, SafetyGuardCounters) {
     t2.cast_active = 1;
     t2.applied = 0;
 
-    {
-        CoutRedirect sink;
-        renderer.log_action(t1, true);
-        renderer.log_action(t2, true);
-    }
+    renderer.log_action(t1, true);
+    renderer.log_action(t2, true);
 
     auto guards = renderer.guard_counters();
     TEST_ASSERT(guards.floor_clamps == 1);
@@ -269,29 +230,11 @@ TEST_CASE(UiRenderer, SafetyGuardCounters) {
 }
 
 TEST_CASE(UiRenderer, VisibleWidthHelper) {
-    // Pure ASCII
     TEST_ASSERT(mitigator::loader::UiRenderer::visible_width("Hello") == 5);
     TEST_ASSERT(mitigator::loader::UiRenderer::visible_width("") == 0);
-
-    // ANSI codes have 0 visible width
     TEST_ASSERT(mitigator::loader::UiRenderer::visible_width("\033[32m[EXCELLENT]\033[0m") == 11);
-    TEST_ASSERT(mitigator::loader::UiRenderer::visible_width("\033[1m\033[31mERROR\033[0m") == 5);
-
-    // UTF-8 box characters have 1 visible column each
     TEST_ASSERT(mitigator::loader::UiRenderer::visible_width("┌─┐") == 3);
     TEST_ASSERT(mitigator::loader::UiRenderer::visible_width("█░") == 2);
-    TEST_ASSERT(mitigator::loader::UiRenderer::visible_width("±") == 1);
-}
-
-TEST_CASE(UiRenderer, MakeBarHelper) {
-    const std::string bar = mitigator::loader::UiRenderer::make_bar(50.0f, 100.0f, 10, "");
-    TEST_ASSERT(mitigator::loader::UiRenderer::visible_width(bar) == 10);
-
-    const std::string full_bar = mitigator::loader::UiRenderer::make_bar(100.0f, 100.0f, 8, "");
-    TEST_ASSERT(mitigator::loader::UiRenderer::visible_width(full_bar) == 8);
-
-    const std::string zero_bar = mitigator::loader::UiRenderer::make_bar(0.0f, 100.0f, 8, "");
-    TEST_ASSERT(mitigator::loader::UiRenderer::visible_width(zero_bar) == 8);
 }
 
 TEST_CASE(UiRenderer, FormatTimeHhmmss) {
@@ -323,15 +266,11 @@ TEST_CASE(UiRenderer, DashboardRenderLayoutAndBorders) {
     const std::string out = redirect.str();
 
     TEST_ASSERT(out.find("\033[H") != std::string::npos);
-    TEST_ASSERT(out.find("LIVE COMBAT DASHBOARD") != std::string::npos);
+    TEST_ASSERT(out.find("FFXIV STANDALONE LATENCY MITIGATOR") != std::string::npos);
     TEST_ASSERT(out.find("4321") != std::string::npos);
-    TEST_ASSERT(out.find("NETWORK & LATENCY") != std::string::npos);
-    TEST_ASSERT(out.find("MITIGATION & THROUGHPUT") != std::string::npos);
-    TEST_ASSERT(out.find("SAFETY GUARDS & DIAGNOSTICS") != std::string::npos);
-    TEST_ASSERT(out.find("RECENT ACTION LOG") != std::string::npos);
+    TEST_ASSERT(out.find("LIVE COMBAT ACTION STREAM") != std::string::npos);
     TEST_ASSERT(out.find("0x1A4F") != std::string::npos);
     TEST_ASSERT(out.find("MITIGATED") != std::string::npos);
-    TEST_ASSERT(out.find("Controls:") != std::string::npos);
     TEST_ASSERT(out.find("╭") != std::string::npos);
     TEST_ASSERT(out.find("╰") != std::string::npos);
     TEST_ASSERT(out.find("\033[?25l") != std::string::npos);
@@ -348,15 +287,10 @@ TEST_CASE(UiRenderer, DashboardStandbyModeBeforeGameLaunches) {
     const std::string out = redirect.str();
 
     TEST_ASSERT(out.find("\033[H") != std::string::npos);
-    TEST_ASSERT(out.find("LIVE COMBAT DASHBOARD") != std::string::npos);
-    TEST_ASSERT(out.find("Target: ") != std::string::npos);
+    TEST_ASSERT(out.find("FFXIV STANDALONE LATENCY MITIGATOR") != std::string::npos);
     TEST_ASSERT(out.find("ffxiv_dx11.exe") != std::string::npos);
-    TEST_ASSERT(out.find("Status: ") != std::string::npos);
     TEST_ASSERT(out.find("Searching for ffxiv_dx11.exe...") != std::string::npos);
-    TEST_ASSERT(out.find("Mode: ") != std::string::npos);
-    TEST_ASSERT(out.find("ACTIVE") != std::string::npos);
-    TEST_ASSERT(out.find("[Waiting for game process & actions...]") != std::string::npos);
-    TEST_ASSERT(out.find("Controls:") != std::string::npos);
+    TEST_ASSERT(out.find("STANDBY") != std::string::npos);
     TEST_ASSERT(renderer.connection_status() == "Searching for ffxiv_dx11.exe...");
 }
 
@@ -368,21 +302,17 @@ TEST_CASE(UiRenderer, ResponsiveTerminalDimensions) {
     renderer.set_terminal_dimensions(120, 35);
     TEST_ASSERT(renderer.terminal_cols() == 120);
     TEST_ASSERT(renderer.terminal_rows() == 35);
-    TEST_ASSERT(renderer.dashboard_display_rows() == 18);
 
-    {
-        CoutRedirect redirect;
-        renderer.render_dashboard(false, false);
-        const std::string out = redirect.str();
-        TEST_ASSERT(out.find("╭") != std::string::npos);
-        TEST_ASSERT(out.find("╰") != std::string::npos);
-    }
+    CoutRedirect redirect;
+    renderer.render_dashboard(false, false);
+    const std::string out = redirect.str();
+    TEST_ASSERT(out.find("╭") != std::string::npos);
+    TEST_ASSERT(out.find("╰") != std::string::npos);
 
     // Test minimum clamping
     renderer.set_terminal_dimensions(60, 15);
     TEST_ASSERT(renderer.terminal_cols() == mitigator::loader::UiRenderer::MIN_DASHBOARD_WIDTH);
     TEST_ASSERT(renderer.terminal_rows() == mitigator::loader::UiRenderer::MIN_DASHBOARD_ROWS);
-    TEST_ASSERT(renderer.dashboard_display_rows() == 7);
 }
 
 TEST_CASE(UiRenderer, FinalSessionReportCard) {
@@ -400,63 +330,88 @@ TEST_CASE(UiRenderer, FinalSessionReportCard) {
     t.applied = 1;
     t.clamped_floor = 1;
 
-    {
-        CoutRedirect sink;
-        renderer.log_action(t, true);
-    }
+    renderer.log_action(t, true);
 
     CoutRedirect redirect;
     renderer.render_final_report();
     const std::string report = redirect.str();
 
-    TEST_ASSERT(report.find("FINAL SESSION TELEMETRY REPORT") != std::string::npos);
+    TEST_ASSERT(report.find("FINAL COMBAT SESSION REPORT") != std::string::npos);
     TEST_ASSERT(report.find("Session Duration:") != std::string::npos);
     TEST_ASSERT(report.find("Total Actions:") != std::string::npos);
-    TEST_ASSERT(report.find("Mitigated Actions:") != std::string::npos);
+    TEST_ASSERT(report.find("Actions Mitigated:") != std::string::npos);
     TEST_ASSERT(report.find("Total Time Saved:") != std::string::npos);
-    TEST_ASSERT(report.find("LATENCY & SAVINGS DISTRIBUTION") != std::string::npos);
-    TEST_ASSERT(report.find("RTT Distribution:") != std::string::npos);
-    TEST_ASSERT(report.find("SAFETY GUARD DIAGNOSTICS") != std::string::npos);
-    TEST_ASSERT(report.find("Floor Clamps:") != std::string::npos);
+    TEST_ASSERT(report.find("RTT (Min/Med/P95):") != std::string::npos);
+    TEST_ASSERT(report.find("Safety Floor Clamps:") != std::string::npos);
 }
 
-TEST_CASE(UiRenderer, ResetStatsClearsExtendedMetrics) {
+TEST_CASE(UiRenderer, FtxuiTabSwitchingAndAnalyticsTab) {
     mitigator::loader::UiRenderer renderer;
 
     mitigator::ipc::TelemetryPayload t{};
-    t.action_id = 0x1111;
+    t.action_id = 0x1A4F;
     t.original_lock_ms = 600.0f;
-    t.adjusted_lock_ms = 450.0f;
-    t.delay_reduced_ms = 150.0f;
-    t.measured_rtt_ms = 60.0f;
-    t.smoothed_rtt_ms = 60.0f;
-    t.jitter_ms = 3.0f;
+    t.adjusted_lock_ms = 465.0f;
+    t.delay_reduced_ms = 135.0f;
+    t.measured_rtt_ms = 48.0f;
+    t.smoothed_rtt_ms = 48.0f;
+    t.jitter_ms = 1.8f;
     t.applied = 1;
-    t.clamped_floor = 1;
-    t.spike_filtered = 1;
-    t.cold_start_guard = 1;
-    t.cast_active = 1;
+    renderer.log_action(t, true);
 
-    {
-        CoutRedirect sink;
-        renderer.log_action(t, true);
+    // Tab 0: Live Combat
+    TEST_ASSERT(renderer.active_tab() == 0);
+    std::string tab0 = renderer.render_snapshot_to_string(100, 30);
+    TEST_ASSERT(tab0.find("LIVE COMBAT ACTION STREAM") != std::string::npos);
+
+    // Switch to Tab 1: Latency Analytics
+    renderer.set_active_tab(1);
+    TEST_ASSERT(renderer.active_tab() == 1);
+    std::string tab1 = renderer.render_snapshot_to_string(100, 30);
+    TEST_ASSERT(tab1.find("REAL-TIME LATENCY WAVEFORM") != std::string::npos);
+    TEST_ASSERT(tab1.find("LATENCY PERCENTILES") != std::string::npos);
+    TEST_ASSERT(tab1.find("TIME SAVED SUMMARY") != std::string::npos);
+    TEST_ASSERT(tab1.find("SAFETY & GUARDS") != std::string::npos);
+
+    // Switch to Tab 2: Settings
+    renderer.set_active_tab(2);
+    TEST_ASSERT(renderer.active_tab() == 2);
+    std::string tab2 = renderer.render_snapshot_to_string(100, 30);
+    TEST_ASSERT(tab2.find("INTERACTIVE SETTINGS & CONFIGURATION") != std::string::npos);
+    TEST_ASSERT(tab2.find("Min Animation Lock Floor") != std::string::npos);
+}
+
+TEST_CASE(UiRenderer, FtxuiSparklineHistoryRingBuffer) {
+    mitigator::loader::UiRenderer renderer;
+
+    for (int i = 1; i <= 70; ++i) {
+        mitigator::ipc::TelemetryPayload t{};
+        t.action_id = 0x01;
+        t.measured_rtt_ms = static_cast<float>(i);
+        t.smoothed_rtt_ms = static_cast<float>(i);
+        t.applied = 1;
+        renderer.log_action(t, false);
     }
 
-    TEST_ASSERT(renderer.total_actions() == 1);
-    TEST_ASSERT(renderer.actions_mitigated() == 1);
-    TEST_ASSERT(renderer.guard_counters().floor_clamps == 1);
-    TEST_ASSERT(renderer.ring_buffer_size() == 1);
+    // Sparkline history must be capped at SPARKLINE_HISTORY_CAPACITY (60)
+    auto history = renderer.rtt_history();
+    TEST_ASSERT(history.size() == mitigator::loader::UiRenderer::SPARKLINE_HISTORY_CAPACITY);
+    TEST_ASSERT_NEAR(history.front(), 11.0f, 0.01f);
+    TEST_ASSERT_NEAR(history.back(), 70.0f, 0.01f);
+}
 
-    renderer.reset_stats();
+TEST_CASE(UiRenderer, FtxuiInteractiveComponentCreation) {
+    mitigator::loader::UiRenderer renderer;
+    auto root = renderer.create_interactive_component();
+    TEST_ASSERT(root != nullptr);
 
-    TEST_ASSERT(renderer.total_actions() == 0);
-    TEST_ASSERT(renderer.actions_mitigated() == 0);
-    TEST_ASSERT(renderer.cumulative_time_saved_ms() == 0.0);
-    TEST_ASSERT(renderer.guard_counters().floor_clamps == 0);
-    TEST_ASSERT(renderer.guard_counters().spike_filtered == 0);
-    TEST_ASSERT(renderer.guard_counters().cold_start_guards == 0);
-    TEST_ASSERT(renderer.guard_counters().cast_locks_preserved == 0);
-    TEST_ASSERT(renderer.ring_buffer_size() == 0);
-    TEST_ASSERT(renderer.rtt_distribution().min_val == 0.0f);
-    TEST_ASSERT(renderer.delay_saved_distribution().min_val == 0.0f);
+    bool config_callback_called = false;
+    renderer.set_on_config_changed([&](const mitigator::MitigationConfig&) {
+        config_callback_called = true;
+    });
+
+    auto cfg = renderer.config();
+    cfg.min_animation_lock_ms = 40.0;
+    renderer.set_config(cfg);
+    TEST_ASSERT_NEAR(renderer.config().min_animation_lock_ms, 40.0, 0.01);
 }

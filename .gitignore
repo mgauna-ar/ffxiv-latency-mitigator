@@ -4,6 +4,7 @@ bin/
 lib/
 out/
 generated/
+src/third_party/
 
 # Executables and compiled objects
 *.exe

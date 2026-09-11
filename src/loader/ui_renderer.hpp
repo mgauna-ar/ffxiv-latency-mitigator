@@ -1,6 +1,11 @@
 #pragma once
 
 #include "mitigator/ipc_protocol.hpp"
+#include "mitigator/config_manager.hpp"
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
+#include <ftxui/component/component.hpp>
+
 #include <string>
 #include <string_view>
 #include <mutex>
@@ -8,6 +13,7 @@
 #include <deque>
 #include <vector>
 #include <chrono>
+#include <functional>
 
 namespace mitigator::loader {
 
@@ -54,11 +60,12 @@ struct GuardCounters {
 };
 
 /**
- * @brief Thread-safe 100-column terminal dashboard and telemetry renderer.
+ * @brief Reactive 3-tab terminal dashboard and telemetry renderer powered by FTXUI.
  *
- * Provides a split-screen in-place live dashboard (persistent top status pane,
- * latency bar meters, guard counters, APM calculations, and a fixed lower
- * action ring buffer) as well as post-session summary report generation.
+ * Provides:
+ * - Tab 1: Live Combat Stream, KPI gauges, and hero status banner.
+ * - Tab 2: Latency Analytics with real-time 60-sample sparkline waveform graph.
+ * - Tab 3: Interactive Settings & Safety Controls (persisted to disk).
  */
 class UiRenderer {
 public:
@@ -70,6 +77,7 @@ public:
     static constexpr size_t INNER_WIDTH = DASHBOARD_WIDTH - 2;
     static constexpr size_t RING_BUFFER_CAPACITY = 24;
     static constexpr size_t DASHBOARD_DISPLAY_ROWS = 6;
+    static constexpr size_t SPARKLINE_HISTORY_CAPACITY = 60;
 
     UiRenderer();
 
@@ -107,13 +115,12 @@ public:
     void render_header(uint32_t pid, uint32_t hook_count, double target_ping_ms, bool dry_run);
 
     /// Records an incoming action telemetry event into metrics and ring buffer.
-    /// In non-dashboard mode, also logs the line directly to stdout.
     void log_action(const ipc::TelemetryPayload& t, bool verbose);
 
     /// Prints a system status / notification message.
     void log_status(const std::string& message, bool is_error = false);
 
-    /// Renders the complete 100-column live split-screen dashboard in-place.
+    /// Renders the complete live split-screen dashboard in-place to stdout.
     void render_dashboard(bool dry_run, bool verbose);
 
     /// Updates and renders the telemetry stats summary card.
@@ -127,6 +134,41 @@ public:
 
     /// Resets all accumulated session stats, distributions, and ring buffer.
     void reset_stats();
+
+    // -------------------------------------------------------------------------
+    // FTXUI DOM & Component Builders
+    // -------------------------------------------------------------------------
+
+    /// Builds the top hero banner DOM element
+    [[nodiscard]] ftxui::Element build_hero_banner() const;
+
+    /// Builds Tab 1: Live Combat Stream DOM element
+    [[nodiscard]] ftxui::Element build_tab_live_combat() const;
+
+    /// Builds Tab 2: Latency Analytics & Waveform DOM element
+    [[nodiscard]] ftxui::Element build_tab_latency_analytics() const;
+
+    /// Builds the complete dashboard DOM document for a given width and height
+    [[nodiscard]] ftxui::Element build_dashboard_document() const;
+
+    /// Renders the current dashboard DOM to a string screen buffer for tests & headless captures
+    [[nodiscard]] std::string render_snapshot_to_string(int width = 100, int height = 30) const;
+
+    /// Creates the interactive FTXUI root component with tabs, sliders, and buttons
+    [[nodiscard]] ftxui::Component create_interactive_component();
+
+    // Tab selection management
+    [[nodiscard]] int active_tab() const;
+    void set_active_tab(int tab_index);
+
+    // Configuration management
+    [[nodiscard]] MitigationConfig config() const;
+    void set_config(const MitigationConfig& config);
+    void set_on_config_changed(std::function<void(const MitigationConfig&)> callback);
+    void set_on_reset_stats_callback(std::function<void()> callback);
+
+    // Latency sparkline history
+    [[nodiscard]] std::vector<float> rtt_history() const;
 
     // Inspection getters for unit testing and diagnostics
     [[nodiscard]] uint64_t total_actions() const;
@@ -152,7 +194,7 @@ public:
 private:
     void record_action_internal(const ipc::TelemetryPayload& t);
 
-    mutable std::mutex m_render_mutex;
+    mutable std::recursive_mutex m_render_mutex;
 
     uint64_t m_total_actions{0};
     uint64_t m_actions_mitigated{0};
@@ -165,6 +207,7 @@ private:
     std::vector<float> m_delay_saved_samples;
     std::deque<ActionLogEntry> m_action_ring_buffer;
     std::deque<std::chrono::steady_clock::time_point> m_recent_action_times;
+    std::deque<float> m_rtt_history;
 
     std::chrono::steady_clock::time_point m_session_start_time;
     uint32_t m_pid{0};
@@ -172,10 +215,22 @@ private:
     double m_target_ping_ms{15.0};
     bool m_dry_run{false};
     bool m_dashboard_mode{false};
-    bool m_dirty{true};
+    mutable bool m_dirty{true};
     std::string m_connection_status{"Waiting for game to launch..."};
     size_t m_cols{DEFAULT_DASHBOARD_WIDTH};
     size_t m_rows{DEFAULT_DASHBOARD_ROWS};
+
+    // FTXUI state
+    int m_active_tab{0};
+    MitigationConfig m_config{ConfigManager::default_config()};
+    std::function<void(const MitigationConfig&)> m_on_config_changed;
+    std::function<void()> m_on_reset_stats;
+    std::string m_settings_feedback;
+
+    // Interactive slider bindings
+    int m_slider_min_lock{25};
+    int m_slider_target_ping{15};
+    int m_slider_margin{0};
 };
 
 } // namespace mitigator::loader

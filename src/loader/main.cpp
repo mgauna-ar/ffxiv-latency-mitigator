@@ -1,5 +1,6 @@
 #include "mitigator/types.hpp"
 #include "mitigator/game_definitions.hpp"
+#include "mitigator/config_manager.hpp"
 #include "loader/process_finder.hpp"
 #include "loader/injector.hpp"
 #include "loader/loader_ipc.hpp"
@@ -241,23 +242,28 @@ inline std::optional<mitigator::loader::ProcessInfo> wait_for_target_process(uin
 } // anonymous namespace
 
 int main(int argc, char* argv[]) {
-    double target_ping_ms = mitigator::constants::DEFAULT_TARGET_PING_MS;
-    double min_lock_ms = mitigator::constants::DEFAULT_MIN_ANIMATION_LOCK_MS;
-    bool dry_run = false;
-    bool verbose = false;
+    auto config = mitigator::ConfigManager::load_from_file(mitigator::ConfigManager::DEFAULT_CONFIG_FILENAME);
+    double target_ping_ms = config.target_ping_ms;
+    double min_lock_ms = config.min_animation_lock_ms;
+    bool dry_run = config.dry_run;
+    bool verbose = config.verbose;
     bool watch_mode = false;
 
-    // Parse command line arguments
+    // Parse command line arguments (CLI arguments take precedence over saved config)
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--target-ping" && i + 1 < argc) {
             target_ping_ms = std::stod(argv[++i]);
+            config.target_ping_ms = target_ping_ms;
         } else if (arg == "--min-lock" && i + 1 < argc) {
             min_lock_ms = std::stod(argv[++i]);
+            config.min_animation_lock_ms = min_lock_ms;
         } else if (arg == "--dry-run") {
             dry_run = true;
+            config.dry_run = true;
         } else if (arg == "--verbose") {
             verbose = true;
+            config.verbose = true;
         } else if (arg == "--watch") {
             watch_mode = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -280,8 +286,25 @@ int main(int argc, char* argv[]) {
     configure_fixed_console(hOut, 100, 30);
 
     mitigator::loader::UiRenderer ui;
+    ui.set_config(config);
     sync_terminal_dimensions(hOut, ui);
     mitigator::loader::LoaderIpcServer ipc_server;
+
+    // Connect UI config change callback to update IPC server and live settings
+    ui.set_on_config_changed([&](const mitigator::MitigationConfig& cfg) {
+        dry_run = cfg.dry_run;
+        verbose = cfg.verbose;
+        target_ping_ms = cfg.target_ping_ms;
+        min_lock_ms = cfg.min_animation_lock_ms;
+        ipc_server.set_dry_run(dry_run);
+        ipc_server.set_verbose(verbose);
+        ipc_server.set_target_ping(static_cast<float>(target_ping_ms));
+        ipc_server.set_min_lock(static_cast<float>(min_lock_ms));
+    });
+
+    ui.set_on_reset_stats_callback([&]() {
+        ipc_server.reset_stats();
+    });
 
     // Telemetry callback
     ipc_server.set_telemetry_callback([&](const mitigator::ipc::TelemetryPayload& t) {
@@ -350,6 +373,18 @@ int main(int argc, char* argv[]) {
                     case 'Q':
                         g_keep_running = false;
                         break;
+                    case '1':
+                        ui.set_active_tab(0);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    case '2':
+                        ui.set_active_tab(1);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    case '3':
+                        ui.set_active_tab(2);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
                     case 'd':
                     case 'D':
                         dry_run = !dry_run;
@@ -368,6 +403,8 @@ int main(int argc, char* argv[]) {
                         break;
                     case 's':
                     case 'S':
+                        mitigator::ConfigManager::save_to_file(mitigator::ConfigManager::DEFAULT_CONFIG_FILENAME, ui.config());
+                        ui.set_connection_status("Configuration saved to mitigator_config.json");
                         ui.render_dashboard(dry_run, verbose);
                         break;
                     default:
@@ -598,6 +635,18 @@ int main(int argc, char* argv[]) {
                     case 'Q':
                         g_keep_running = false;
                         break;
+                    case '1':
+                        ui.set_active_tab(0);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    case '2':
+                        ui.set_active_tab(1);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
+                    case '3':
+                        ui.set_active_tab(2);
+                        ui.render_dashboard(dry_run, verbose);
+                        break;
                     case 'd':
                     case 'D':
                         dry_run = !dry_run;
@@ -632,10 +681,12 @@ int main(int argc, char* argv[]) {
                         break;
                     case 's':
                     case 'S':
+                        mitigator::ConfigManager::save_to_file(mitigator::ConfigManager::DEFAULT_CONFIG_FILENAME, ui.config());
                         if (ui.is_dashboard_mode()) {
+                            ui.set_connection_status("Configuration saved to mitigator_config.json");
                             ui.render_dashboard(dry_run, verbose);
                         } else {
-                            ui.render_stats_summary();
+                            ui.log_status("Saved settings to mitigator_config.json");
                         }
                         break;
                     default:
@@ -669,6 +720,7 @@ int main(int argc, char* argv[]) {
     }
 
     restore_scrollable_console(hOut);
+    mitigator::ConfigManager::save_to_file(mitigator::ConfigManager::DEFAULT_CONFIG_FILENAME, ui.config());
     std::cout << "[+] Done. Clean exit completed.\n";
     wait_for_user_exit();
     return 0;
