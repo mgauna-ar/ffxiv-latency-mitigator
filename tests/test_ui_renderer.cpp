@@ -222,7 +222,7 @@ TEST_CASE(UiRenderer, PercentileCalculations) {
 TEST_CASE(UiRenderer, ActionRingBufferEviction) {
     mitigator::loader::UiRenderer renderer;
 
-    for (uint32_t i = 1; i <= 20; ++i) {
+    for (uint32_t i = 1; i <= 30; ++i) {
         mitigator::ipc::TelemetryPayload t{};
         t.action_id = 0x1000 + i;
         t.original_lock_ms = 600.0f;
@@ -236,10 +236,10 @@ TEST_CASE(UiRenderer, ActionRingBufferEviction) {
         renderer.log_action(t, true);
     }
 
-    // Capacity must be capped at RING_BUFFER_CAPACITY (12)
+    // Capacity must be capped at RING_BUFFER_CAPACITY (24)
     TEST_ASSERT(renderer.ring_buffer_size() == mitigator::loader::UiRenderer::RING_BUFFER_CAPACITY);
-    TEST_ASSERT(renderer.total_actions() == 20);
-    TEST_ASSERT(renderer.actions_mitigated() == 20);
+    TEST_ASSERT(renderer.total_actions() == 30);
+    TEST_ASSERT(renderer.actions_mitigated() == 30);
 }
 
 TEST_CASE(UiRenderer, SafetyGuardCounters) {
@@ -330,8 +330,11 @@ TEST_CASE(UiRenderer, DashboardRenderLayoutAndBorders) {
     TEST_ASSERT(out.find("SAFETY GUARDS & DIAGNOSTICS") != std::string::npos);
     TEST_ASSERT(out.find("RECENT ACTION LOG") != std::string::npos);
     TEST_ASSERT(out.find("0x1A4F") != std::string::npos);
-    TEST_ASSERT(out.find("[Mitigated]") != std::string::npos);
+    TEST_ASSERT(out.find("MITIGATED") != std::string::npos);
     TEST_ASSERT(out.find("Controls:") != std::string::npos);
+    TEST_ASSERT(out.find("╭") != std::string::npos);
+    TEST_ASSERT(out.find("╰") != std::string::npos);
+    TEST_ASSERT(out.find("\033[?25l") != std::string::npos);
 }
 
 TEST_CASE(UiRenderer, DashboardStandbyModeBeforeGameLaunches) {
@@ -355,6 +358,31 @@ TEST_CASE(UiRenderer, DashboardStandbyModeBeforeGameLaunches) {
     TEST_ASSERT(out.find("[Waiting for game process & actions...]") != std::string::npos);
     TEST_ASSERT(out.find("Controls:") != std::string::npos);
     TEST_ASSERT(renderer.connection_status() == "Searching for ffxiv_dx11.exe...");
+}
+
+TEST_CASE(UiRenderer, ResponsiveTerminalDimensions) {
+    mitigator::loader::UiRenderer renderer;
+    TEST_ASSERT(renderer.terminal_cols() == mitigator::loader::UiRenderer::DEFAULT_DASHBOARD_WIDTH);
+    TEST_ASSERT(renderer.terminal_rows() == mitigator::loader::UiRenderer::DEFAULT_DASHBOARD_ROWS);
+
+    renderer.set_terminal_dimensions(120, 35);
+    TEST_ASSERT(renderer.terminal_cols() == 120);
+    TEST_ASSERT(renderer.terminal_rows() == 35);
+    TEST_ASSERT(renderer.dashboard_display_rows() == 18);
+
+    {
+        CoutRedirect redirect;
+        renderer.render_dashboard(false, false);
+        const std::string out = redirect.str();
+        TEST_ASSERT(out.find("╭") != std::string::npos);
+        TEST_ASSERT(out.find("╰") != std::string::npos);
+    }
+
+    // Test minimum clamping
+    renderer.set_terminal_dimensions(60, 15);
+    TEST_ASSERT(renderer.terminal_cols() == mitigator::loader::UiRenderer::MIN_DASHBOARD_WIDTH);
+    TEST_ASSERT(renderer.terminal_rows() == mitigator::loader::UiRenderer::MIN_DASHBOARD_ROWS);
+    TEST_ASSERT(renderer.dashboard_display_rows() == 7);
 }
 
 TEST_CASE(UiRenderer, FinalSessionReportCard) {

@@ -27,23 +27,36 @@ std::atomic<bool> g_keep_running{true};
 
 BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT) {
+        std::cout << "\033[?25h" << std::flush;
         g_keep_running = false;
         return TRUE;
     }
     return FALSE;
 }
 
-void configure_fixed_console(HANDLE hOut, SHORT cols = 80, SHORT rows = 25) {
+void configure_fixed_console(HANDLE hOut, SHORT default_cols = 100, SHORT default_rows = 30) {
     if (!hOut || hOut == INVALID_HANDLE_VALUE) {
         return;
     }
+
+    CONSOLE_SCREEN_BUFFER_INFO csbi{};
+    SHORT target_cols = default_cols;
+    SHORT target_rows = default_rows;
+
+    if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+        const SHORT cur_cols = static_cast<SHORT>(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+        const SHORT cur_rows = static_cast<SHORT>(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
+        target_cols = (std::max)(default_cols, cur_cols);
+        target_rows = (std::max)(default_rows, cur_rows);
+    }
+
     SMALL_RECT temp_rect = {0, 0, 1, 1};
     SetConsoleWindowInfo(hOut, TRUE, &temp_rect);
 
-    COORD buffer_size = {cols, rows};
+    COORD buffer_size = {target_cols, target_rows};
     SetConsoleScreenBufferSize(hOut, buffer_size);
 
-    SMALL_RECT window_rect = {0, 0, static_cast<SHORT>(cols - 1), static_cast<SHORT>(rows - 1)};
+    SMALL_RECT window_rect = {0, 0, static_cast<SHORT>(target_cols - 1), static_cast<SHORT>(target_rows - 1)};
     SetConsoleWindowInfo(hOut, TRUE, &window_rect);
 
     HWND hwnd = GetConsoleWindow();
@@ -56,11 +69,29 @@ void configure_fixed_console(HANDLE hOut, SHORT cols = 80, SHORT rows = 25) {
     }
 }
 
+void sync_terminal_dimensions(HANDLE hOut, mitigator::loader::UiRenderer& ui) {
+    if (!hOut || hOut == INVALID_HANDLE_VALUE) return;
+    CONSOLE_SCREEN_BUFFER_INFO csbi{};
+    if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+        const size_t cols = static_cast<size_t>(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+        const size_t rows = static_cast<size_t>(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
+        ui.set_terminal_dimensions(cols, rows);
+    }
+}
+
 void restore_scrollable_console(HANDLE hOut) {
     if (!hOut || hOut == INVALID_HANDLE_VALUE) {
         return;
     }
-    COORD buffer_size = {80, 300};
+    std::cout << "\033[?25h" << std::flush;
+
+    CONSOLE_SCREEN_BUFFER_INFO csbi{};
+    SHORT cols = 100;
+    if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+        cols = (std::max)(cols, static_cast<SHORT>(csbi.srWindow.Right - csbi.srWindow.Left + 1));
+    }
+
+    COORD buffer_size = {cols, 300};
     SetConsoleScreenBufferSize(hOut, buffer_size);
 
     HWND hwnd = GetConsoleWindow();
@@ -246,9 +277,10 @@ int main(int argc, char* argv[]) {
         SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
 
-    configure_fixed_console(hOut, 80, 25);
+    configure_fixed_console(hOut, 100, 30);
 
     mitigator::loader::UiRenderer ui;
+    sync_terminal_dimensions(hOut, ui);
     mitigator::loader::LoaderIpcServer ipc_server;
 
     // Telemetry callback
@@ -632,7 +664,8 @@ int main(int argc, char* argv[]) {
         }
 
         ui.reset_stats();
-        configure_fixed_console(hOut, 80, 25);
+        configure_fixed_console(hOut, 100, 30);
+        sync_terminal_dimensions(hOut, ui);
     }
 
     restore_scrollable_console(hOut);

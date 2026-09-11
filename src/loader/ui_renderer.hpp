@@ -62,9 +62,13 @@ struct GuardCounters {
  */
 class UiRenderer {
 public:
+    static constexpr size_t DEFAULT_DASHBOARD_WIDTH = 100;
+    static constexpr size_t MIN_DASHBOARD_WIDTH = 78;
+    static constexpr size_t DEFAULT_DASHBOARD_ROWS = 30;
+    static constexpr size_t MIN_DASHBOARD_ROWS = 24;
     static constexpr size_t DASHBOARD_WIDTH = 78;
     static constexpr size_t INNER_WIDTH = DASHBOARD_WIDTH - 2;
-    static constexpr size_t RING_BUFFER_CAPACITY = 12;
+    static constexpr size_t RING_BUFFER_CAPACITY = 24;
     static constexpr size_t DASHBOARD_DISPLAY_ROWS = 6;
 
     UiRenderer();
@@ -77,6 +81,18 @@ public:
 
     /// Gets the current connection status message.
     [[nodiscard]] std::string connection_status() const;
+
+    /// Updates the terminal window dimensions for responsive layout rendering.
+    void set_terminal_dimensions(size_t cols, size_t rows);
+
+    /// Gets current terminal width in columns.
+    [[nodiscard]] size_t terminal_cols() const;
+
+    /// Gets current terminal height in rows.
+    [[nodiscard]] size_t terminal_rows() const;
+
+    /// Gets the calculated number of action rows displayed in the live combat feed.
+    [[nodiscard]] size_t dashboard_display_rows() const;
 
     /// Enables or disables in-place split-screen dashboard mode.
     void set_dashboard_mode(bool enabled);
@@ -158,6 +174,8 @@ private:
     bool m_dashboard_mode{false};
     bool m_dirty{true};
     std::string m_connection_status{"Waiting for game to launch..."};
+    size_t m_cols{DEFAULT_DASHBOARD_WIDTH};
+    size_t m_rows{DEFAULT_DASHBOARD_ROWS};
 };
 
 } // namespace mitigator::loader
