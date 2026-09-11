@@ -171,7 +171,7 @@ When a major patch is released, memory offsets and function signatures in `ffxiv
 
 `ffxiv-mitigator` works out of the box with zero configuration. For advanced users, settings can be customized through three layers with the following precedence:
 
-$$\textbf{CLI Flags} \;\;>\;\; \textbf{mitigator\_config.json} \;\;>\;\; \textbf{Built-in Defaults}$$
+> **Precedence**: **CLI Flags** &nbsp;&gt;&nbsp; **`mitigator_config.json`** &nbsp;&gt;&nbsp; **Built-in Defaults**
 
 ### Configuration File (`mitigator_config.json`)
 
