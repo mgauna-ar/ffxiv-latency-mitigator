@@ -75,6 +75,7 @@ public:
     static constexpr size_t RING_BUFFER_CAPACITY = 24;
     static constexpr size_t DASHBOARD_DISPLAY_ROWS = 6;
     static constexpr size_t SPARKLINE_HISTORY_CAPACITY = 60;
+    static constexpr size_t MAX_DISTRIBUTION_SAMPLES = 1000;
 
     UiRenderer();
 
@@ -162,13 +163,14 @@ public:
     [[nodiscard]] LatencyDistribution rtt_distribution() const;
     [[nodiscard]] LatencyDistribution delay_saved_distribution() const;
     [[nodiscard]] GuardCounters guard_counters() const;
-    [[nodiscard]] double calculate_apm() const;
+    [[nodiscard]] double calculate_apm(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) const;
     [[nodiscard]] size_t ring_buffer_size() const;
     [[nodiscard]] std::chrono::seconds uptime() const;
 
     // Static formatting and utility helpers
     [[nodiscard]] static size_t visible_width(std::string_view s);
     [[nodiscard]] static LatencyDistribution compute_distribution(const std::vector<float>& samples);
+    [[nodiscard]] static LatencyDistribution compute_distribution(const std::deque<float>& samples);
     [[nodiscard]] static std::string make_bar(float value, float max_val, size_t bar_width, const char* bar_color);
     [[nodiscard]] static std::string format_time_hhmmss(std::chrono::seconds total_secs);
     [[nodiscard]] static std::string current_time_hhmmss();
@@ -187,10 +189,10 @@ private:
     float m_last_jitter{0.0f};
 
     GuardCounters m_guards{};
-    std::vector<float> m_rtt_samples;
-    std::vector<float> m_delay_saved_samples;
+    std::deque<float> m_rtt_samples;
+    std::deque<float> m_delay_saved_samples;
     std::deque<ActionLogEntry> m_action_ring_buffer;
-    std::deque<std::chrono::steady_clock::time_point> m_recent_action_times;
+    mutable std::deque<std::chrono::steady_clock::time_point> m_recent_action_times;
     std::deque<float> m_rtt_history;
 
     std::chrono::steady_clock::time_point m_session_start_time;

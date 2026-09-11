@@ -479,5 +479,59 @@ TEST_CASE(UiRenderer, SynchronizedUpdateModeFrameSwapping) {
     TEST_ASSERT(out.find("\033[?2026l") != std::string::npos);
 }
 
+TEST_CASE(UiRenderer, ApmDecaysToZeroWithoutNewActions) {
+    mitigator::loader::UiRenderer renderer;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    mitigator::ipc::TelemetryPayload t{};
+    t.action_id = 0x1A4F;
+    t.delay_reduced_ms = 100.0f;
+    t.applied = 1;
+
+    renderer.log_action(t, true);
+    TEST_ASSERT(renderer.calculate_apm(t0) == 1.0);
+
+    // After 30s, still 1 action in window
+    TEST_ASSERT(renderer.calculate_apm(t0 + std::chrono::seconds(30)) == 1.0);
+
+    // After 65s without new actions, APM must decay to 0.0
+    TEST_ASSERT(renderer.calculate_apm(t0 + std::chrono::seconds(65)) == 0.0);
+}
+
+TEST_CASE(UiRenderer, DistributionSamplesBoundedToMaxCapacity) {
+    mitigator::loader::UiRenderer renderer;
+
+    // Log 1200 actions (exceeding MAX_DISTRIBUTION_SAMPLES = 1000)
+    for (uint32_t i = 1; i <= 1200; ++i) {
+        mitigator::ipc::TelemetryPayload t{};
+        t.action_id = i;
+        t.measured_rtt_ms = static_cast<float>(i);
+        t.smoothed_rtt_ms = static_cast<float>(i);
+        t.delay_reduced_ms = 50.0f;
+        t.applied = 1;
+        renderer.log_action(t, true);
+    }
+
+    TEST_ASSERT(renderer.total_actions() == 1200);
+    const auto dist = renderer.rtt_distribution();
+    // Earliest 200 samples were pruned from the 1000-sample sliding window
+    TEST_ASSERT_NEAR(dist.min_val, 201.0f, 1.0f);
+    TEST_ASSERT_NEAR(dist.max_val, 1200.0f, 1.0f);
+}
+
+TEST_CASE(UiRenderer, HeroBannerFitsWithinStrictDashboardWidth) {
+    mitigator::loader::UiRenderer renderer;
+    const std::string snapshot = renderer.render_snapshot_to_string(78, 24);
+
+    std::istringstream stream(snapshot);
+    std::string line;
+    std::getline(stream, line); // Row 1: top border
+    std::getline(stream, line); // Row 2: hero title banner
+    const size_t vw = mitigator::loader::UiRenderer::visible_width(line);
+    TEST_ASSERT(vw <= 78);
+    TEST_ASSERT(line.find("FFXIV STANDALONE LATENCY MITIGATOR") != std::string::npos);
+}
+
+
 
 

@@ -28,7 +28,7 @@ std::atomic<bool> g_keep_running{true};
 
 BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT) {
-        std::cout << "\033[?1049l\033[?25h" << std::flush;
+        std::cout << "\033[?2026l\033[?1049l\033[?25h" << std::flush;
         g_keep_running = false;
         return TRUE;
     }
@@ -81,7 +81,7 @@ void sync_terminal_dimensions(HANDLE hOut, mitigator::loader::UiRenderer& ui) {
 }
 
 void restore_scrollable_console(HANDLE hOut) {
-    std::cout << "\033[?1049l\033[?25h" << std::flush;
+    std::cout << "\033[?2026l\033[?1049l\033[?25h" << std::flush;
     if (!hOut || hOut == INVALID_HANDLE_VALUE) {
         return;
     }
@@ -491,6 +491,18 @@ int main(int argc, char* argv[]) {
         SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
 
+    // Disable QuickEdit mode on console input to prevent mouse clicks from freezing output
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD original_in_mode = 0;
+    bool in_mode_saved = false;
+    if (hIn && hIn != INVALID_HANDLE_VALUE && GetConsoleMode(hIn, &original_in_mode)) {
+        in_mode_saved = true;
+        DWORD in_mode = original_in_mode;
+        in_mode &= ~ENABLE_QUICK_EDIT_MODE;
+        in_mode |= ENABLE_EXTENDED_FLAGS;
+        SetConsoleMode(hIn, in_mode);
+    }
+
     configure_fixed_console(hOut, 100, 30);
 
     mitigator::loader::UiRenderer ui;
@@ -782,6 +794,13 @@ int main(int argc, char* argv[]) {
                 break;
             }
 
+            // Detect if injected payload disconnected or pipe broke while game is running
+            if (!ipc_server.is_connected()) {
+                ui.set_connection_status("Telemetry Disconnected (Payload Detached)");
+                ui.render_dashboard(dry_run, verbose);
+                break;
+            }
+
             sync_terminal_dimensions(hOut, ui);
 
             const auto now = std::chrono::steady_clock::now();
@@ -828,6 +847,9 @@ int main(int argc, char* argv[]) {
     restore_scrollable_console(hOut);
     mitigator::ConfigManager::save_to_file(mitigator::ConfigManager::DEFAULT_CONFIG_FILENAME, ui.config());
     std::cout << "[+] Done. Clean exit completed.\n";
+    if (in_mode_saved && hIn && hIn != INVALID_HANDLE_VALUE) {
+        SetConsoleMode(hIn, original_in_mode);
+    }
     wait_for_user_exit();
     return 0;
 }

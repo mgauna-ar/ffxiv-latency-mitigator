@@ -282,10 +282,16 @@ void UiRenderer::record_action_internal(const ipc::TelemetryPayload& t) {
         ++m_actions_mitigated;
         m_cumulative_time_saved_ms += static_cast<double>(t.delay_reduced_ms);
         m_delay_saved_samples.push_back(t.delay_reduced_ms);
+        if (m_delay_saved_samples.size() > MAX_DISTRIBUTION_SAMPLES) {
+            m_delay_saved_samples.pop_front();
+        }
     }
     m_last_smoothed_rtt = t.smoothed_rtt_ms;
     m_last_jitter = t.jitter_ms;
     m_rtt_samples.push_back(t.measured_rtt_ms);
+    if (m_rtt_samples.size() > MAX_DISTRIBUTION_SAMPLES) {
+        m_rtt_samples.pop_front();
+    }
 
     m_rtt_history.push_back(t.measured_rtt_ms);
     if (m_rtt_history.size() > SPARKLINE_HISTORY_CAPACITY) {
@@ -443,7 +449,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
 
     // 2. Hero title banner
     const std::string header_title = std::string(color::TITLE) + color::BOLD +
-        "⚡ FFXIV STANDALONE LATENCY MITIGATOR (C++20) — LIVE COMBAT DASHBOARD" + color::RESET;
+        "◆ FFXIV STANDALONE LATENCY MITIGATOR (C++20) — LIVE COMBAT DASHBOARD" + color::RESET;
     lines.push_back(make_box_row(header_title, inner_w));
 
     // 3. Target process metadata
@@ -959,8 +965,17 @@ GuardCounters UiRenderer::guard_counters() const {
     return m_guards;
 }
 
-double UiRenderer::calculate_apm() const {
+double UiRenderer::calculate_apm(std::chrono::steady_clock::time_point now) const {
     std::lock_guard<std::recursive_mutex> lock(m_render_mutex);
+    while (!m_recent_action_times.empty()) {
+        const auto age = std::chrono::duration_cast<std::chrono::seconds>(
+            now - m_recent_action_times.front()).count();
+        if (age > 60) {
+            m_recent_action_times.pop_front();
+        } else {
+            break;
+        }
+    }
     return static_cast<double>(m_recent_action_times.size());
 }
 
@@ -1008,12 +1023,26 @@ LatencyDistribution UiRenderer::compute_distribution(const std::vector<float>& s
     if (samples.empty()) return LatencyDistribution{};
     std::vector<float> sorted = samples;
     std::sort(sorted.begin(), sorted.end());
-    size_t n = sorted.size();
+    const size_t n = sorted.size();
     LatencyDistribution dist{};
     dist.min_val = sorted.front();
     dist.max_val = sorted.back();
     dist.median_val = sorted[n / 2];
-    size_t p95_idx = (n > 1) ? static_cast<size_t>(std::floor(static_cast<double>(n - 1) * 0.95)) : 0;
+    const size_t p95_idx = (n > 1) ? static_cast<size_t>(std::floor(static_cast<double>(n - 1) * 0.95)) : 0;
+    dist.p95_val = sorted[p95_idx];
+    return dist;
+}
+
+LatencyDistribution UiRenderer::compute_distribution(const std::deque<float>& samples) {
+    if (samples.empty()) return LatencyDistribution{};
+    std::vector<float> sorted(samples.begin(), samples.end());
+    std::sort(sorted.begin(), sorted.end());
+    const size_t n = sorted.size();
+    LatencyDistribution dist{};
+    dist.min_val = sorted.front();
+    dist.max_val = sorted.back();
+    dist.median_val = sorted[n / 2];
+    const size_t p95_idx = (n > 1) ? static_cast<size_t>(std::floor(static_cast<double>(n - 1) * 0.95)) : 0;
     dist.p95_val = sorted[p95_idx];
     return dist;
 }
