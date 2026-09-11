@@ -196,6 +196,13 @@ void PayloadIpcClient::set_command_handler(CommandHandler handler) {
 }
 
 void PayloadIpcClient::writer_thread_func() {
+    OVERLAPPED ov_write{};
+    ov_write.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!ov_write.hEvent) {
+        m_connected = false;
+        return;
+    }
+
     while (true) {
         std::vector<uint8_t> packet;
         {
@@ -217,29 +224,27 @@ void PayloadIpcClient::writer_thread_func() {
         if (!packet.empty()) {
             std::lock_guard<std::mutex> lock(m_send_mutex);
             if (m_pipe_handle && m_pipe_handle != INVALID_HANDLE_VALUE) {
-                OVERLAPPED ov_write{};
-                ov_write.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
-                if (ov_write.hEvent) {
-                    DWORD written = 0;
-                    BOOL ok = WriteFile(
-                        static_cast<HANDLE>(m_pipe_handle),
-                        packet.data(),
-                        static_cast<DWORD>(packet.size()),
-                        &written,
-                        &ov_write
-                    );
-                    if (!ok && GetLastError() == ERROR_IO_PENDING) {
-                        ok = GetOverlappedResult(static_cast<HANDLE>(m_pipe_handle), &ov_write, &written, TRUE);
-                    }
-                    CloseHandle(ov_write.hEvent);
-                    if (!ok) {
-                        m_connected = false;
-                        break;
-                    }
+                ResetEvent(ov_write.hEvent);
+                DWORD written = 0;
+                BOOL ok = WriteFile(
+                    static_cast<HANDLE>(m_pipe_handle),
+                    packet.data(),
+                    static_cast<DWORD>(packet.size()),
+                    &written,
+                    &ov_write
+                );
+                if (!ok && GetLastError() == ERROR_IO_PENDING) {
+                    ok = GetOverlappedResult(static_cast<HANDLE>(m_pipe_handle), &ov_write, &written, TRUE);
+                }
+                if (!ok) {
+                    m_connected = false;
+                    break;
                 }
             }
         }
     }
+
+    CloseHandle(ov_write.hEvent);
 }
 
 void PayloadIpcClient::reader_thread_func() {

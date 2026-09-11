@@ -192,15 +192,22 @@ bool interruptible_sleep(std::chrono::milliseconds duration) {
 
 std::optional<mitigator::loader::ProcessInfo> find_target_process(uint32_t exclude_pid) {
     auto proc = mitigator::loader::ProcessFinder::find_process();
-    if (proc.has_value() && proc->pid != 0 && proc->pid != exclude_pid) {
-        if (proc->handle != nullptr) {
-            if (WaitForSingleObject(static_cast<HANDLE>(proc->handle), 0) == WAIT_OBJECT_0) {
-                CloseHandle(static_cast<HANDLE>(proc->handle));
-                proc->handle = nullptr;
-                return std::nullopt;
+    if (proc.has_value()) {
+        if (proc->pid != 0 && proc->pid != exclude_pid) {
+            if (proc->handle != nullptr) {
+                if (WaitForSingleObject(static_cast<HANDLE>(proc->handle), 0) == WAIT_OBJECT_0) {
+                    CloseHandle(static_cast<HANDLE>(proc->handle));
+                    proc->handle = nullptr;
+                    return std::nullopt;
+                }
             }
+            return proc;
         }
-        return proc;
+        // If process was excluded or invalid, ensure opened handle is closed immediately
+        if (proc->handle != nullptr) {
+            CloseHandle(static_cast<HANDLE>(proc->handle));
+            proc->handle = nullptr;
+        }
     }
     return std::nullopt;
 }
