@@ -64,7 +64,7 @@ TEST_CASE(UiRenderer, AppliedGatePreventsDryRunCounterInflation) {
 }
 
 TEST_CASE(UiRenderer, QualityScoringTiers) {
-    // 1. Excellent (RTT < 30ms)
+    // 1. Excellent (Action RTT <= 100ms)
     {
         mitigator::loader::UiRenderer renderer;
         mitigator::ipc::TelemetryPayload t{};
@@ -78,12 +78,12 @@ TEST_CASE(UiRenderer, QualityScoringTiers) {
         TEST_ASSERT(out.find("EXCELLENT") != std::string::npos);
     }
 
-    // 2. Good (RTT < 70ms)
+    // 2. Good (Action RTT <= 220ms)
     {
         mitigator::loader::UiRenderer renderer;
         mitigator::ipc::TelemetryPayload t{};
-        t.smoothed_rtt_ms = 55.0f;
-        t.jitter_ms = 3.0f;
+        t.smoothed_rtt_ms = 150.0f;
+        t.jitter_ms = 5.0f;
         t.delay_reduced_ms = 10.0f;
         t.applied = 1;
         renderer.log_action(t, true);
@@ -92,12 +92,12 @@ TEST_CASE(UiRenderer, QualityScoringTiers) {
         TEST_ASSERT(out.find("GOOD") != std::string::npos);
     }
 
-    // 3. Fair (RTT < 120ms)
+    // 3. Fair (Action RTT <= 380ms, e.g. ~200ms ping + server delay)
     {
         mitigator::loader::UiRenderer renderer;
         mitigator::ipc::TelemetryPayload t{};
-        t.smoothed_rtt_ms = 95.0f;
-        t.jitter_ms = 6.0f;
+        t.smoothed_rtt_ms = 320.0f;
+        t.jitter_ms = 15.0f;
         t.delay_reduced_ms = 10.0f;
         t.applied = 1;
         renderer.log_action(t, true);
@@ -106,12 +106,12 @@ TEST_CASE(UiRenderer, QualityScoringTiers) {
         TEST_ASSERT(out.find("FAIR") != std::string::npos);
     }
 
-    // 4. Poor (RTT >= 120ms)
+    // 4. Poor (Action RTT > 380ms)
     {
         mitigator::loader::UiRenderer renderer;
         mitigator::ipc::TelemetryPayload t{};
-        t.smoothed_rtt_ms = 160.0f;
-        t.jitter_ms = 12.0f;
+        t.smoothed_rtt_ms = 450.0f;
+        t.jitter_ms = 25.0f;
         t.delay_reduced_ms = 10.0f;
         t.applied = 1;
         renderer.log_action(t, true);

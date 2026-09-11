@@ -99,15 +99,15 @@ const char* get_quality_tier(float rtt, float jitter, const char*& out_color) {
         out_color = color::MUTED;
         return "[INITIALIZING]";
     }
-    if (rtt <= 40.0f && jitter <= 3.0f) {
+    if (rtt <= 100.0f && jitter <= 5.0f) {
         out_color = color::MINT;
         return "[EXCELLENT]";
     }
-    if (rtt <= 80.0f && jitter <= 10.0f) {
+    if (rtt <= 220.0f && jitter <= 15.0f) {
         out_color = color::ACCENT;
         return "[GOOD]";
     }
-    if (rtt <= 130.0f && jitter <= 20.0f) {
+    if (rtt <= 380.0f && jitter <= 35.0f) {
         out_color = color::AMBER;
         return "[FAIR]";
     }
@@ -369,7 +369,7 @@ void UiRenderer::render_stats_summary() {
     std::cout << "Mitigated: " << color::GREEN << m_actions_mitigated << "/" << m_total_actions << color::RESET
               << " | Total Saved: " << color::YELLOW << color::BOLD << std::fixed << std::setprecision(2) << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
               << " | Avg/Action: " << color::CYAN << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::RESET
-              << " | Ping: " << m_last_smoothed_rtt << "ms (jitter: " << m_last_jitter << "ms)"
+              << " | Action RTT: " << m_last_smoothed_rtt << "ms (jitter: " << m_last_jitter << "ms)"
               << " " << quality_color << quality_str << color::RESET << "\n";
 }
 
@@ -489,12 +489,12 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         m_last_jitter,
         quality_color
     );
-    const std::string ping_bar = make_bar(m_last_smoothed_rtt, 200.0f, 8, color::ACCENT);
+    const std::string ping_bar = make_bar(m_last_smoothed_rtt, 500.0f, 8, color::ACCENT);
     const auto rtt_dist = compute_distribution(m_rtt_samples);
 
     std::ostringstream kpi1;
     kpi1 << color::BOLD << color::TEXT << "NETWORK & LATENCY: " << color::RESET
-         << "Ping " << ping_bar << " " << color::TEXT << std::fixed << std::setprecision(1)
+         << "Action RTT " << ping_bar << " " << color::TEXT << std::fixed << std::setprecision(1)
          << std::setw(5) << m_last_smoothed_rtt << "ms" << color::RESET
          << " " << quality_color << quality_str << color::RESET
          << color::MUTED << " (±" << std::fixed << std::setprecision(1) << m_last_jitter << "ms jitter)"
@@ -552,11 +552,11 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         std::ostringstream tbl_hdr;
         if (inner_w >= 90) {
             tbl_hdr << color::MUTED
-                    << "TIME     │ #SEQ  │ ACTION   │ ANIMATION LOCK         │ SAVED     │ RTT (SMOOTH)   │ STATUS"
+                    << "TIME     │ #SEQ  │ ACTION   │ ANIMATION LOCK         │ SAVED     │ ACTION RTT     │ STATUS"
                     << color::RESET;
         } else {
             tbl_hdr << color::MUTED
-                    << "TIME    │#SEQ │ACTION│LOCK BEFORE->AFTER│SAVED  │RTT (SMOOTH)│STATUS"
+                    << "TIME    │#SEQ │ACTION│LOCK BEFORE->AFTER│SAVED  │ACTION RTT  │STATUS"
                     << color::RESET;
         }
         lines.push_back(make_box_row(tbl_hdr.str(), inner_w));
@@ -641,28 +641,28 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
             lines.push_back(make_box_row("", inner_w));
             lines.push_back(make_box_row("", inner_w));
         } else {
-            // Row 3: 150ms+
-            std::string row3 = "  150ms+ ┤ ";
+            // Row 3: 350ms+
+            std::string row3 = "  350ms+ ┤ ";
             for (size_t i = (hist.size() > sparkline_width ? hist.size() - sparkline_width : 0); i < hist.size(); ++i) {
-                if (hist[i] >= 150.0f) row3 += std::string(color::CORAL) + "█" + color::RESET;
-                else if (hist[i] >= 120.0f) row3 += std::string(color::AMBER) + "▆" + color::RESET;
+                if (hist[i] >= 350.0f) row3 += std::string(color::CORAL) + "█" + color::RESET;
+                else if (hist[i] >= 280.0f) row3 += std::string(color::AMBER) + "▆" + color::RESET;
                 else row3 += " ";
             }
             lines.push_back(make_box_row(row3, inner_w));
 
-            // Row 2: 80ms - 150ms
-            std::string row2 = "   80ms  ┤ ";
+            // Row 2: 200ms - 350ms
+            std::string row2 = "  200ms  ┤ ";
             for (size_t i = (hist.size() > sparkline_width ? hist.size() - sparkline_width : 0); i < hist.size(); ++i) {
-                if (hist[i] >= 80.0f) row2 += std::string(color::ACCENT) + "█" + color::RESET;
-                else if (hist[i] >= 60.0f) row2 += std::string(color::MINT) + "▄" + color::RESET;
+                if (hist[i] >= 200.0f) row2 += std::string(color::ACCENT) + "█" + color::RESET;
+                else if (hist[i] >= 140.0f) row2 += std::string(color::MINT) + "▄" + color::RESET;
                 else row2 += " ";
             }
             lines.push_back(make_box_row(row2, inner_w));
 
-            // Row 1: 30ms - 80ms
-            std::string row1 = "   30ms  ┤ ";
+            // Row 1: 80ms - 200ms
+            std::string row1 = "   80ms  ┤ ";
             for (size_t i = (hist.size() > sparkline_width ? hist.size() - sparkline_width : 0); i < hist.size(); ++i) {
-                if (hist[i] >= 30.0f) row1 += std::string(color::MINT) + "█" + color::RESET;
+                if (hist[i] >= 80.0f) row1 += std::string(color::MINT) + "█" + color::RESET;
                 else row1 += std::string(color::MINT) + "▂" + color::RESET;
             }
             lines.push_back(make_box_row(row1, inner_w));
