@@ -134,13 +134,16 @@ The mitigator tracks this true Action RTT and automatically trims off the excess
 </details>
 
 <details>
-<summary><b>Is this safe to use? Will I get banned?</b></summary>
+<summary><b>Is this against Square Enix's Terms of Service? Could I get banned?</b></summary>
 <br>
 
-The mitigator is designed with conservative anti-cheat guardrails:
-1. **Hard Floor Clamping**: Animation locks can never drop below `min_animation_lock_ms` (default 25.0 ms), matching standard low-ping client behavior and avoiding server frequency anomaly flags.
-2. **Client-Side Only**: It does not modify network packets sent to the server or alter global cooldowns (GCDs). It only adjusts the client's local animation lock timer after the server confirms an action.
-3. **Preserves Cast Locks**: Spell casting locks and slide-cast states are strictly preserved to maintain animation synchronization.
+**Officially, yes**: Under Section 2.5 of the Square Enix Final Fantasy XIV User Agreement, all third-party tools, utilities, and client modifications are strictly prohibited. Use of `ffxiv-mitigator` is at your own risk.
+
+**In practice & safety guidelines**:
+1. **Never discuss tools in-game**: Final Fantasy XIV has no client-side anti-cheat scanning your RAM or running processes. Account penalties for third-party tools (including ACT, Dalamud, or Alexander) occur almost exclusively when players discuss or admit to using them in in-game chat, or display tool telemetry on public streams with their character name visible.
+2. **Anti-Cheat Safety Floors**: Unlike packet-tampering hacks, this tool only adjusts the client's local animation lock timer *after* the server confirms an action. It enforces a strict hard floor (`min_animation_lock_ms: 25.0 ms`) so your character can never act faster than a player living directly next to the data center, preventing server-side action frequency anomaly flags.
+3. **Preserves Cast Locks**: Spell casting locks and slide-cast states are strictly preserved to maintain animation and server synchronization.
+4. **Clean In-Memory Execution**: It makes zero permanent changes to files on disk, does not spoof server-side cooldowns, and detaches cleanly with `[Q]`.
 </details>
 
 <details>
