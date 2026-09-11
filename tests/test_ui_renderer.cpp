@@ -532,6 +532,125 @@ TEST_CASE(UiRenderer, HeroBannerFitsWithinStrictDashboardWidth) {
     TEST_ASSERT(line.find("FFXIV STANDALONE LATENCY MITIGATOR") != std::string::npos);
 }
 
+TEST_CASE(UiRenderer, TableColumnsAlignedWithHeader) {
+    mitigator::loader::UiRenderer renderer;
+    renderer.set_session_info(1234, 2, 15.0, false);
+
+    mitigator::ipc::TelemetryPayload t1{};
+    t1.action_id = 0x1A4F;
+    t1.sequence = 42;
+    t1.original_lock_ms = 600.0f;
+    t1.adjusted_lock_ms = 465.0f;
+    t1.delay_reduced_ms = 135.0f;
+    t1.measured_rtt_ms = 52.0f;
+    t1.smoothed_rtt_ms = 50.0f;
+    t1.applied = 1;
+    t1.clamped_floor = 1;
+    renderer.log_action(t1, true);
+
+    mitigator::ipc::TelemetryPayload t2 = t1;
+    t2.delay_reduced_ms = 0.0f;
+    t2.applied = 0;
+    t2.clamped_floor = 0;
+    renderer.log_action(t2, true);
+
+    auto extract_dividers = [](const std::string& line) {
+        std::vector<size_t> positions;
+        size_t vw = 0;
+        bool in_esc = false;
+        for (size_t i = 0; i < line.size(); ++i) {
+            if (line[i] == '\033') { in_esc = true; continue; }
+            if (in_esc) {
+                if (line[i] == 'm' || line[i] == 'K' || line[i] == 'H') in_esc = false;
+                continue;
+            }
+            unsigned char c = static_cast<unsigned char>(line[i]);
+            if ((c & 0xC0) != 0x80) {
+                vw++;
+            }
+            if ((unsigned char)line[i] == 0xE2 && i + 2 < line.size() &&
+                (unsigned char)line[i+1] == 0x94 && (unsigned char)line[i+2] == 0x82) {
+                positions.push_back(vw);
+            }
+        }
+        return positions;
+    };
+
+    // Test wide mode (width 100)
+    {
+        std::string snap = renderer.render_snapshot_to_string(100, 30);
+        std::istringstream iss(snap);
+        std::string line;
+        std::vector<size_t> header_divs;
+        std::vector<std::vector<size_t>> row_divs;
+        while (std::getline(iss, line)) {
+            if (line.find("ANIMATION LOCK") != std::string::npos) {
+                header_divs = extract_dividers(line);
+            } else if (line.find("0x1A4F") != std::string::npos) {
+                row_divs.push_back(extract_dividers(line));
+            }
+        }
+        TEST_ASSERT(!header_divs.empty());
+        TEST_ASSERT(row_divs.size() == 2);
+        for (const auto& r_divs : row_divs) {
+            TEST_ASSERT(r_divs == header_divs);
+        }
+    }
+
+    // Test narrow mode (width 78)
+    {
+        std::string snap = renderer.render_snapshot_to_string(78, 24);
+        std::istringstream iss(snap);
+        std::string line;
+        std::vector<size_t> header_divs;
+        std::vector<std::vector<size_t>> row_divs;
+        while (std::getline(iss, line)) {
+            if (line.find("ANIM LOCK(ms)") != std::string::npos) {
+                header_divs = extract_dividers(line);
+            } else if (line.find("0x1A4F") != std::string::npos) {
+                row_divs.push_back(extract_dividers(line));
+            }
+        }
+        TEST_ASSERT(!header_divs.empty());
+        TEST_ASSERT(row_divs.size() == 2);
+        for (const auto& r_divs : row_divs) {
+            TEST_ASSERT(r_divs == header_divs);
+        }
+    }
+}
+
+TEST_CASE(UiRenderer, AllRowsFitExactlyWithinTerminalDimensions) {
+    mitigator::loader::UiRenderer renderer;
+    renderer.set_session_info(1234, 2, 15.0, false);
+
+    mitigator::ipc::TelemetryPayload t{};
+    t.action_id = 0x1A4F;
+    t.original_lock_ms = 600.0f;
+    t.adjusted_lock_ms = 465.0f;
+    t.delay_reduced_ms = 135.0f;
+    t.measured_rtt_ms = 52.0f;
+    t.smoothed_rtt_ms = 50.0f;
+    t.jitter_ms = 2.0f;
+    t.applied = 1;
+    t.clamped_floor = 1;
+    renderer.log_action(t, true);
+
+    const std::vector<int> widths = {78, 80, 90, 100, 120};
+    for (int w : widths) {
+        for (int tab = 0; tab < 3; ++tab) {
+            renderer.set_active_tab(tab);
+            std::string snap = renderer.render_snapshot_to_string(w, 25);
+            std::istringstream iss(snap);
+            std::string line;
+            while (std::getline(iss, line)) {
+                size_t vw = mitigator::loader::UiRenderer::visible_width(line);
+                TEST_ASSERT(vw == static_cast<size_t>(w));
+            }
+        }
+    }
+}
+
+
 
 
 

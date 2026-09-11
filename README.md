@@ -54,21 +54,21 @@ Right-click `ffxiv-mitigator.exe` and select **Run as Administrator** (required 
 The console will automatically discover the game process, inject the payload, hook combat routines, and display the live dashboard:
 
 ```text
-╭─────────────────────────────────────────────────────────────────────────────────────────╮
-│ ⚡ FFXIV STANDALONE LATENCY MITIGATOR (C++20) — LIVE COMBAT DASHBOARD                   │
-│ Target: ffxiv_dx11.exe (PID: 14088) │ Detours: 2/2 Active │ Mode: ACTIVE                │
-├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ ▶ [1] Live Combat  │   [2] Latency Analytics  │   [3] Settings & Safety                 │
-├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ NETWORK & LATENCY: Action RTT [████░░░░] 365.2ms [FAIR] (±6.4ms jitter) │ Target: 15ms  │
-│ MITIGATION & THROUGHPUT: Mitigated [████████] 100% (42/42) │ Saved: 14.82s (Avg: 352.8ms│
-│ SAFETY GUARDS & DIAGNOSTICS: APM: 48.5 │ Uptime: 00:08:24 │ Floor: 0 │ Spike: 0 │ Cast: │
-├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ LIVE COMBAT ACTION STREAM                                                               │
-│ TIME     │ #SEQ  │ ACTION   │ ANIMATION LOCK         │ SAVED     │ ACTION RTT     │ STATUS  │
-│ 14:20:05 │ #0041 │ 0x1D8D   │ 600.0ms ➔  247.2ms     │ -352.8ms  │ 367ms (365ms)  │ MITIGAT │
-│ 14:20:06 │ #0042 │ 0x1D8E   │ 600.0ms ➔  248.0ms     │ -352.0ms  │ 366ms (365ms)  │ MITIGAT │
-╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ◆ FFXIV STANDALONE LATENCY MITIGATOR (C++20) — LIVE COMBAT DASHBOARD                             │
+│ Target: ffxiv_dx11.exe (PID: 14088) │ Detours: 2/2 Active │ Mode: ACTIVE                         │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ▶ [1] Live Combat │   [2] Latency Analytics │   [3] Settings & Safety                            │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ RTT: [████░░] 365.2ms [FAIR] (±6.4ms) │ Target: 15ms │ RTT Med/P95/Max: 362/380/410ms            │
+│ MITIGATION: [██████] 100% (42/42) │ Saved: 14.82s (Avg: 352.8ms) │ Total Actions: 42             │
+│ DIAGNOSTICS: APM: 48.5 │ Uptime: 00:08:24 │ Floor: 0 │ Spike: 0 │ Cold: 0 │ Cast: 0             │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ LIVE COMBAT ACTION STREAM                                                                        │
+│ TIME     │ #SEQ  │ ACTION │  ANIMATION LOCK  │  SAVED   │  ACTION RTT  │ STATUS                  │
+│ 14:20:05 │ #0041 │ 0x1D8D │ 600.0ms➔247.2ms  │ -352.8ms │ 367ms(365ms) │ [MITIGATED]             │
+│ 14:20:06 │ #0042 │ 0x1D8E │ 600.0ms➔248.0ms  │ -352.0ms │ 366ms(365ms) │ [MITIGATED]             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 > [!TIP]

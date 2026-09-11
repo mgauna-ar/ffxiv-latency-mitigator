@@ -76,14 +76,56 @@ std::string box_bottom_line(size_t width = UiRenderer::DEFAULT_DASHBOARD_WIDTH) 
     return std::string(color::BORDER) + box::BL + repeat_str(box::H, width - 2) + box::BR + color::RESET;
 }
 
+std::string truncate_to_visible_width(std::string_view s, size_t max_vw) {
+    if (UiRenderer::visible_width(s) <= max_vw) {
+        return std::string(s);
+    }
+    std::string out;
+    size_t count = 0;
+    bool in_escape = false;
+    for (size_t i = 0; i < s.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (s[i] == '\033') {
+            in_escape = true;
+            out += s[i];
+            continue;
+        }
+        if (in_escape) {
+            out += s[i];
+            if (s[i] == 'm' || s[i] == 'K' || s[i] == 'H' || s[i] == 'J' || s[i] == 'h' || s[i] == 'l') {
+                in_escape = false;
+            }
+            continue;
+        }
+        if ((c & 0xC0) != 0x80) {
+            if (count >= max_vw) {
+                break;
+            }
+            ++count;
+        }
+        out += s[i];
+    }
+    out += color::RESET;
+    return out;
+}
+
 std::string make_box_row(std::string_view content, size_t inner_width) {
-    const size_t vw = UiRenderer::visible_width(content);
+    const size_t max_content_vw = (inner_width >= 2) ? (inner_width - 2) : 0;
+    std::string truncated;
+    std::string_view actual_content = content;
+    size_t vw = UiRenderer::visible_width(content);
+    if (vw > max_content_vw) {
+        truncated = truncate_to_visible_width(content, max_content_vw);
+        actual_content = truncated;
+        vw = UiRenderer::visible_width(actual_content);
+    }
+
     std::string line;
     line += color::BORDER;
     line += box::V;
     line += color::RESET;
     line += " ";
-    line += content;
+    line += actual_content;
     if (vw + 2 < inner_width) {
         line.append(inner_width - vw - 2, ' ');
     }
@@ -455,14 +497,27 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
     // 3. Target process metadata
     std::ostringstream meta_ss;
     if (m_pid == 0) {
-        meta_ss << color::MUTED << "Target: " << color::TARGET << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
-                << color::MUTED << " │ Status: " << color::AMBER << "STANDBY (" << m_connection_status << ")" << color::RESET
-                << color::MUTED << " │ Mode: " << (m_dry_run ? std::string(color::PURPLE) + "DRY-RUN" : std::string(color::MINT) + "ACTIVE") << color::RESET;
+        if (inner_w < 90) {
+            meta_ss << color::MUTED << "Target: " << color::TARGET << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
+                    << color::MUTED << " │ " << color::AMBER << "STANDBY" << color::RESET
+                    << color::MUTED << " │ Mode: " << (m_dry_run ? std::string(color::PURPLE) + "DRY" : std::string(color::MINT) + "ACTIVE") << color::RESET;
+        } else {
+            meta_ss << color::MUTED << "Target: " << color::TARGET << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
+                    << color::MUTED << " │ Status: " << color::AMBER << "STANDBY (" << m_connection_status << ")" << color::RESET
+                    << color::MUTED << " │ Mode: " << (m_dry_run ? std::string(color::PURPLE) + "DRY-RUN" : std::string(color::MINT) + "ACTIVE") << color::RESET;
+        }
     } else {
-        meta_ss << color::MUTED << "Target: " << color::TARGET << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
-                << color::TEXT << " (PID: " << m_pid << ")" << color::RESET
-                << color::MUTED << " │ Detours: " << color::MINT << m_hook_count << "/" << game::definitions::TOTAL_AVAILABLE_HOOKS << " Active" << color::RESET
-                << color::MUTED << " │ Mode: " << (m_dry_run ? std::string(color::PURPLE) + "DRY-RUN" : std::string(color::MINT) + "ACTIVE") << color::RESET;
+        if (inner_w < 90) {
+            meta_ss << color::MUTED << "Target: " << color::TARGET << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
+                    << color::TEXT << " (" << m_pid << ")" << color::RESET
+                    << color::MUTED << " │ Detours: " << color::MINT << m_hook_count << "/" << game::definitions::TOTAL_AVAILABLE_HOOKS << color::RESET
+                    << color::MUTED << " │ " << (m_dry_run ? std::string(color::PURPLE) + "DRY" : std::string(color::MINT) + "ACTIVE") << color::RESET;
+        } else {
+            meta_ss << color::MUTED << "Target: " << color::TARGET << game::definitions::DEFAULT_GAME_PROCESS_NAME << color::RESET
+                    << color::TEXT << " (PID: " << m_pid << ")" << color::RESET
+                    << color::MUTED << " │ Detours: " << color::MINT << m_hook_count << "/" << game::definitions::TOTAL_AVAILABLE_HOOKS << " Active" << color::RESET
+                    << color::MUTED << " │ Mode: " << (m_dry_run ? std::string(color::PURPLE) + "DRY-RUN" : std::string(color::MINT) + "ACTIVE") << color::RESET;
+        }
     }
     lines.push_back(make_box_row(meta_ss.str(), inner_w));
 
@@ -495,36 +550,80 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         m_last_jitter,
         quality_color
     );
-    const std::string ping_bar = make_bar(m_last_smoothed_rtt, 500.0f, 8, color::ACCENT);
     const auto rtt_dist = compute_distribution(m_rtt_samples);
 
     std::ostringstream kpi1;
-    kpi1 << color::BOLD << color::TEXT << "NETWORK & LATENCY: " << color::RESET
-         << "Action RTT " << ping_bar << " " << color::TEXT << std::fixed << std::setprecision(1)
-         << std::setw(5) << m_last_smoothed_rtt << "ms" << color::RESET
-         << " " << quality_color << quality_str << color::RESET
-         << color::MUTED << " (±" << std::fixed << std::setprecision(1) << m_last_jitter << "ms jitter)"
-         << " │ Target: " << color::TEXT << std::fixed << std::setprecision(0) << m_target_ping_ms << "ms"
-         << color::MUTED << " │ RTT Med/P95/Max: " << color::TEXT << std::fixed << std::setprecision(0)
-         << rtt_dist.median_val << "/" << rtt_dist.p95_val << "/" << rtt_dist.max_val << "ms" << color::RESET;
+    if (inner_w >= 130) {
+        const std::string ping_bar = make_bar(m_last_smoothed_rtt, 500.0f, 8, color::ACCENT);
+        kpi1 << color::BOLD << color::TEXT << "NETWORK & LATENCY: " << color::RESET
+             << "Action RTT " << ping_bar << " " << color::TEXT << std::fixed << std::setprecision(1)
+             << std::setw(5) << m_last_smoothed_rtt << "ms" << color::RESET
+             << " " << quality_color << quality_str << color::RESET
+             << color::MUTED << " (±" << std::fixed << std::setprecision(1) << m_last_jitter << "ms jitter)"
+             << " │ Target: " << color::TEXT << std::fixed << std::setprecision(0) << m_target_ping_ms << "ms"
+             << color::MUTED << " │ RTT Med/P95/Max: " << color::TEXT << std::fixed << std::setprecision(0)
+             << rtt_dist.median_val << "/" << rtt_dist.p95_val << "/" << rtt_dist.max_val << "ms" << color::RESET;
+    } else if (inner_w >= 90) {
+        const std::string ping_bar = make_bar(m_last_smoothed_rtt, 500.0f, 6, color::ACCENT);
+        kpi1 << color::BOLD << color::TEXT << "RTT: " << color::RESET
+             << ping_bar << " " << color::TEXT << std::fixed << std::setprecision(1)
+             << std::setw(5) << m_last_smoothed_rtt << "ms" << color::RESET
+             << " " << quality_color << quality_str << color::RESET
+             << color::MUTED << " (±" << std::fixed << std::setprecision(1) << m_last_jitter << "ms)"
+             << " │ Target: " << color::TEXT << std::fixed << std::setprecision(0) << m_target_ping_ms << "ms"
+             << color::MUTED << " │ RTT Med/P95/Max: " << color::TEXT << std::fixed << std::setprecision(0)
+             << rtt_dist.median_val << "/" << rtt_dist.p95_val << "/" << rtt_dist.max_val << "ms" << color::RESET;
+    } else {
+        const std::string small_bar = make_bar(m_last_smoothed_rtt, 500.0f, 4, color::ACCENT);
+        kpi1 << color::BOLD << color::TEXT << "RTT: " << color::RESET
+             << small_bar << " " << color::TEXT << std::fixed << std::setprecision(1)
+             << m_last_smoothed_rtt << "ms" << color::RESET
+             << " " << quality_color << quality_str << color::RESET
+             << color::MUTED << " (±" << std::fixed << std::setprecision(1) << m_last_jitter << "m)"
+             << " │ Tgt: " << color::TEXT << std::fixed << std::setprecision(0) << m_target_ping_ms << "m"
+             << color::MUTED << " │ " << color::TEXT << std::fixed << std::setprecision(0)
+             << rtt_dist.median_val << "/" << rtt_dist.p95_val << "/" << rtt_dist.max_val << "ms" << color::RESET;
+    }
     lines.push_back(make_box_row(kpi1.str(), inner_w));
 
     // 8. KPI Row 2: Mitigation & Throughput
     const float mit_ratio = (m_total_actions > 0) ?
         static_cast<float>(m_actions_mitigated) / static_cast<float>(m_total_actions) : 0.0f;
-    const std::string mit_bar = make_bar(mit_ratio, 1.0f, 8, color::MINT);
     const double avg_reduction = m_actions_mitigated > 0 ?
         (m_cumulative_time_saved_ms / static_cast<double>(m_actions_mitigated)) : 0.0;
 
     std::ostringstream kpi2;
-    kpi2 << color::BOLD << color::TEXT << "MITIGATION & THROUGHPUT: " << color::RESET
-         << "Mitigated " << mit_bar << " " << color::MINT << std::fixed << std::setprecision(0)
-         << (mit_ratio * 100.0f) << "%" << color::RESET
-         << color::MUTED << " (" << m_actions_mitigated << "/" << m_total_actions << ")"
-         << " │ Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
-         << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
-         << color::MUTED << " (Avg: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::MUTED << ")"
-         << " │ Total Actions: " << color::TEXT << m_total_actions << color::RESET;
+    if (inner_w >= 130) {
+        const std::string mit_bar = make_bar(mit_ratio, 1.0f, 8, color::MINT);
+        kpi2 << color::BOLD << color::TEXT << "MITIGATION & THROUGHPUT: " << color::RESET
+             << "Mitigated " << mit_bar << " " << color::MINT << std::fixed << std::setprecision(0)
+             << (mit_ratio * 100.0f) << "%" << color::RESET
+             << color::MUTED << " (" << m_actions_mitigated << "/" << m_total_actions << ")"
+             << " │ Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
+             << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
+             << color::MUTED << " (Avg: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::MUTED << ")"
+             << " │ Total Actions: " << color::TEXT << m_total_actions << color::RESET;
+    } else if (inner_w >= 90) {
+        const std::string mit_bar = make_bar(mit_ratio, 1.0f, 6, color::MINT);
+        kpi2 << color::BOLD << color::TEXT << "MITIGATION: " << color::RESET
+             << mit_bar << " " << color::MINT << std::fixed << std::setprecision(0)
+             << (mit_ratio * 100.0f) << "%" << color::RESET
+             << color::MUTED << " (" << m_actions_mitigated << "/" << m_total_actions << ")"
+             << " │ Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
+             << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
+             << color::MUTED << " (Avg: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::MUTED << ")"
+             << " │ Total Actions: " << color::TEXT << m_total_actions << color::RESET;
+    } else {
+        const std::string mit_bar = make_bar(mit_ratio, 1.0f, 4, color::MINT);
+        kpi2 << color::BOLD << color::TEXT << "MIT: " << color::RESET
+             << mit_bar << " " << color::MINT << std::fixed << std::setprecision(0)
+             << (mit_ratio * 100.0f) << "%" << color::RESET
+             << color::MUTED << " (" << m_actions_mitigated << "/" << m_total_actions << ")"
+             << " │ Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
+             << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
+             << color::MUTED << " (Avg " << color::TEXT << std::fixed << std::setprecision(0) << avg_reduction << "ms" << color::MUTED << ")"
+             << " │ Total: " << color::TEXT << m_total_actions << color::RESET;
+    }
     lines.push_back(make_box_row(kpi2.str(), inner_w));
 
     // 9. KPI Row 3: Pacing & Guards
@@ -535,13 +634,22 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
     const double apm = calculate_apm();
 
     std::ostringstream kpi3;
-    kpi3 << color::BOLD << color::TEXT << "SAFETY GUARDS & DIAGNOSTICS: " << color::RESET
-         << "APM: " << color::TEXT << std::fixed << std::setprecision(1) << apm << color::RESET
-         << color::MUTED << " │ Uptime: " << color::TEXT << format_time_hhmmss(elapsed_secs) << color::RESET
-         << color::MUTED << " │ Floor: " << color::AMBER << m_guards.floor_clamps << color::RESET
-         << color::MUTED << " │ Spike: " << color::CORAL << m_guards.spike_filtered << color::RESET
-         << color::MUTED << " │ Cold: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
-         << color::MUTED << " │ Cast: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
+    if (inner_w >= 90) {
+        kpi3 << color::BOLD << color::TEXT << "DIAGNOSTICS: " << color::RESET
+             << "APM: " << color::TEXT << std::fixed << std::setprecision(1) << apm << color::RESET
+             << color::MUTED << " │ Uptime: " << color::TEXT << format_time_hhmmss(elapsed_secs) << color::RESET
+             << color::MUTED << " │ Floor: " << color::AMBER << m_guards.floor_clamps << color::RESET
+             << color::MUTED << " │ Spike: " << color::CORAL << m_guards.spike_filtered << color::RESET
+             << color::MUTED << " │ Cold: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
+             << color::MUTED << " │ Cast: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
+    } else {
+        kpi3 << color::BOLD << color::TEXT << "APM: " << color::RESET << std::fixed << std::setprecision(1) << apm
+             << color::MUTED << " │ Up: " << color::TEXT << format_time_hhmmss(elapsed_secs) << color::RESET
+             << color::MUTED << " │ Flr: " << color::AMBER << m_guards.floor_clamps << color::RESET
+             << color::MUTED << " │ Spk: " << color::CORAL << m_guards.spike_filtered << color::RESET
+             << color::MUTED << " │ Cld: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
+             << color::MUTED << " │ Cst: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
+    }
     lines.push_back(make_box_row(kpi3.str(), inner_w));
 
     // 10. Separator to Active Tab View
@@ -558,11 +666,23 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         std::ostringstream tbl_hdr;
         if (inner_w >= 90) {
             tbl_hdr << color::MUTED
-                    << "TIME     │ #SEQ  │ ACTION   │ ANIMATION LOCK         │ SAVED     │ ACTION RTT     │ STATUS"
+                    << "TIME    " << " │ "
+                    << "#SEQ " << " │ "
+                    << "ACTION" << " │ "
+                    << " ANIMATION LOCK " << " │ "
+                    << " SAVED  " << " │ "
+                    << " ACTION RTT " << " │ "
+                    << "STATUS"
                     << color::RESET;
         } else {
             tbl_hdr << color::MUTED
-                    << "TIME    │#SEQ │ACTION│LOCK BEFORE->AFTER│SAVED  │ACTION RTT  │STATUS"
+                    << "TIME    " << "│"
+                    << "#SEQ " << "│"
+                    << "ACTION" << "│"
+                    << "ANIM LOCK(ms)" << "│"
+                    << " SAVED " << "│"
+                    << "RTT(SMO) " << "│"
+                    << "STATUS"
                     << color::RESET;
         }
         lines.push_back(make_box_row(tbl_hdr.str(), inner_w));
@@ -586,22 +706,22 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                         row_ss << color::MUTED << entry.timestamp_str << " │ "
                                << color::TEXT << "#" << std::setw(4) << std::setfill('0') << entry.index << std::setfill(' ') << color::MUTED << " │ "
                                << color::TARGET << "0x" << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << entry.action_id << std::setfill(' ') << std::dec << color::MUTED << " │ "
-                               << color::TEXT << std::fixed << std::setprecision(1) << std::setw(5) << entry.original_lock_ms << "ms ➔ "
+                               << " " << color::TEXT << std::fixed << std::setprecision(1) << std::setw(5) << entry.original_lock_ms << "ms➔"
                                << color::MINT << std::setw(5) << entry.adjusted_lock_ms << "ms" << color::MUTED << " │ ";
 
                         if (entry.delay_reduced_ms > 0) {
                             row_ss << color::MINT << color::BOLD << "-" << std::fixed << std::setprecision(1) << std::setw(5) << entry.delay_reduced_ms << "ms" << color::RESET << color::MUTED << " │ ";
                         } else {
-                            row_ss << color::MUTED << "  +0.0ms  │ ";
+                            row_ss << color::MUTED << " +0.0ms  │ ";
                         }
 
-                        row_ss << color::TEXT << std::setw(4) << static_cast<int>(entry.measured_rtt_ms) << "ms ("
-                               << std::setw(3) << static_cast<int>(entry.smoothed_rtt_ms) << "ms)" << color::MUTED << " │ ";
+                        row_ss << color::TEXT << std::setw(3) << static_cast<int>(entry.measured_rtt_ms) << "ms("
+                               << std::setw(3) << static_cast<int>(entry.smoothed_rtt_ms) << "ms) " << color::MUTED << "│ ";
                     } else {
                         row_ss << color::MUTED << entry.timestamp_str << "│"
                                << color::TEXT << "#" << std::setw(4) << std::setfill('0') << entry.index << std::setfill(' ') << color::MUTED << "│"
                                << color::TARGET << "0x" << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << entry.action_id << std::setfill(' ') << std::dec << color::MUTED << "│"
-                               << color::TEXT << std::fixed << std::setprecision(1) << std::setw(5) << entry.original_lock_ms << "m->"
+                               << color::TEXT << std::fixed << std::setprecision(1) << std::setw(5) << entry.original_lock_ms << "m➔"
                                << color::MINT << std::setw(5) << entry.adjusted_lock_ms << "m" << color::MUTED << "│";
 
                         if (entry.delay_reduced_ms > 0) {
@@ -611,7 +731,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                         }
 
                         row_ss << color::TEXT << std::setw(3) << static_cast<int>(entry.measured_rtt_ms) << "m("
-                               << std::setw(3) << static_cast<int>(entry.smoothed_rtt_ms) << "m)" << color::MUTED << "│";
+                               << std::setw(2) << static_cast<int>(entry.smoothed_rtt_ms) << "m)" << color::MUTED << "│";
                     }
 
                     std::string tags;
@@ -684,12 +804,20 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         lines.push_back(make_box_row(std::string(color::BOLD) + color::TITLE + "LATENCY PERCENTILES" + color::RESET, inner_w));
 
         std::ostringstream p_ss;
-        p_ss << "  Min: " << color::TEXT << std::fixed << std::setprecision(1) << rtt_dist.min_val << "ms" << color::RESET
-             << " │ Median: " << color::TEXT << rtt_dist.median_val << "ms" << color::RESET
-             << " │ P95: " << color::TEXT << rtt_dist.p95_val << "ms" << color::RESET
-             << " │ Max: " << color::TEXT << rtt_dist.max_val << "ms" << color::RESET
-             << " │ Jitter: " << color::TEXT << "±" << m_last_jitter << "ms" << color::RESET
-             << " │ Quality: " << quality_color << quality_str << color::RESET;
+        if (inner_w >= 90) {
+            p_ss << "  Min: " << color::TEXT << std::fixed << std::setprecision(1) << rtt_dist.min_val << "ms" << color::RESET
+                 << " │ Median: " << color::TEXT << rtt_dist.median_val << "ms" << color::RESET
+                 << " │ P95: " << color::TEXT << rtt_dist.p95_val << "ms" << color::RESET
+                 << " │ Max: " << color::TEXT << rtt_dist.max_val << "ms" << color::RESET
+                 << " │ Jitter: " << color::TEXT << "±" << m_last_jitter << "ms" << color::RESET
+                 << " │ Quality: " << quality_color << quality_str << color::RESET;
+        } else {
+            p_ss << "  Min: " << color::TEXT << std::fixed << std::setprecision(0) << rtt_dist.min_val << "ms" << color::RESET
+                 << " │ Med: " << color::TEXT << rtt_dist.median_val << "ms" << color::RESET
+                 << " │ P95: " << color::TEXT << rtt_dist.p95_val << "ms" << color::RESET
+                 << " │ Max: " << color::TEXT << rtt_dist.max_val << "ms" << color::RESET
+                 << " │ " << quality_color << quality_str << color::RESET;
+        }
         lines.push_back(make_box_row(p_ss.str(), inner_w));
 
         lines.push_back(box_separator_line(cols));
@@ -699,11 +827,19 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
 
         auto saved_dist = compute_distribution(m_delay_saved_samples);
         std::ostringstream s_ss;
-        s_ss << "  Total Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
-             << (m_cumulative_time_saved_ms / 1000.0) << "s" << color::RESET
-             << " │ Avg Reduction: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::RESET
-             << " │ Saved P95: " << color::TEXT << saved_dist.p95_val << "ms" << color::RESET
-             << " │ Saved Max: " << color::TEXT << saved_dist.max_val << "ms" << color::RESET;
+        if (inner_w >= 90) {
+            s_ss << "  Total Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
+                 << (m_cumulative_time_saved_ms / 1000.0) << "s" << color::RESET
+                 << " │ Avg Reduction: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::RESET
+                 << " │ Saved P95: " << color::TEXT << saved_dist.p95_val << "ms" << color::RESET
+                 << " │ Saved Max: " << color::TEXT << saved_dist.max_val << "ms" << color::RESET;
+        } else {
+            s_ss << "  Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
+                 << (m_cumulative_time_saved_ms / 1000.0) << "s" << color::RESET
+                 << " │ Avg: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::RESET
+                 << " │ P95: " << color::TEXT << saved_dist.p95_val << "ms" << color::RESET
+                 << " │ Max: " << color::TEXT << saved_dist.max_val << "ms" << color::RESET;
+        }
         lines.push_back(make_box_row(s_ss.str(), inner_w));
 
         lines.push_back(box_separator_line(cols));
@@ -712,10 +848,17 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         lines.push_back(make_box_row(std::string(color::BOLD) + color::TITLE + "SAFETY & GUARDS" + color::RESET, inner_w));
 
         std::ostringstream g_ss;
-        g_ss << "  Floor Clamps: " << color::AMBER << m_guards.floor_clamps << color::RESET
-             << " │ Spike Filtered: " << color::CORAL << m_guards.spike_filtered << color::RESET
-             << " │ Cold-Start Guards: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
-             << " │ Cast-Locks Preserved: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
+        if (inner_w >= 90) {
+            g_ss << "  Floor Clamps: " << color::AMBER << m_guards.floor_clamps << color::RESET
+                 << " │ Spike Filtered: " << color::CORAL << m_guards.spike_filtered << color::RESET
+                 << " │ Cold-Start Guards: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
+                 << " │ Cast-Locks Preserved: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
+        } else {
+            g_ss << "  Floor: " << color::AMBER << m_guards.floor_clamps << color::RESET
+                 << " │ Spike: " << color::CORAL << m_guards.spike_filtered << color::RESET
+                 << " │ Cold: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
+                 << " │ Cast: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
+        }
         lines.push_back(make_box_row(g_ss.str(), inner_w));
     }
     // -------------------------------------------------------------------------
@@ -728,41 +871,72 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
 
         std::ostringstream cfg1;
         cfg1 << "  Min Animation Lock Floor : [" << color::BOLD << color::TEXT << std::setw(5) << std::fixed << std::setprecision(1)
-             << m_config.min_animation_lock_ms << " ms" << color::RESET << "]"
-             << color::MUTED << "  (Hotkeys: [F] -5ms  /  [Shift+F] +5ms)" << color::RESET;
+             << m_config.min_animation_lock_ms << " ms" << color::RESET << "]";
+        if (inner_w >= 90) {
+            cfg1 << color::MUTED << "  (Hotkeys: [F] -5ms  /  [Shift+F] +5ms)" << color::RESET;
+        } else {
+            cfg1 << color::MUTED << "  ([F]/[Shift+F])" << color::RESET;
+        }
         lines.push_back(make_box_row(cfg1.str(), inner_w));
 
         std::ostringstream cfg2;
         cfg2 << "  Simulated Target Ping    : [" << color::BOLD << color::TEXT << std::setw(5) << std::fixed << std::setprecision(1)
-             << m_config.target_ping_ms << " ms" << color::RESET << "]"
-             << color::MUTED << "  (Hotkeys: [P] -5ms  /  [Shift+P] +5ms)" << color::RESET;
+             << m_config.target_ping_ms << " ms" << color::RESET << "]";
+        if (inner_w >= 90) {
+            cfg2 << color::MUTED << "  (Hotkeys: [P] -5ms  /  [Shift+P] +5ms)" << color::RESET;
+        } else {
+            cfg2 << color::MUTED << "  ([P]/[Shift+P])" << color::RESET;
+        }
         lines.push_back(make_box_row(cfg2.str(), inner_w));
 
         std::ostringstream cfg3;
         cfg3 << "  Mitigation Safety Margin : [" << color::BOLD << color::TEXT << std::setw(5) << std::fixed << std::setprecision(1)
-             << m_config.safety_margin_ms << " ms" << color::RESET << "]"
-             << color::MUTED << "  (Hotkeys: [M] -1ms  /  [Shift+M] +1ms)" << color::RESET;
+             << m_config.safety_margin_ms << " ms" << color::RESET << "]";
+        if (inner_w >= 90) {
+            cfg3 << color::MUTED << "  (Hotkeys: [M] -1ms  /  [Shift+M] +1ms)" << color::RESET;
+        } else {
+            cfg3 << color::MUTED << "  ([M]/[Shift+M])" << color::RESET;
+        }
         lines.push_back(make_box_row(cfg3.str(), inner_w));
 
         std::ostringstream cfg4;
-        cfg4 << "  Operating Mode           : [" << (m_dry_run ? std::string(color::PURPLE) + "DRY-RUN (Monitoring Only)" : std::string(color::MINT) + "ACTIVE (Live Animation Lock Mitigation)") << color::RESET << "]"
-             << color::MUTED << "  (Hotkey: [D] Toggle)" << color::RESET;
+        if (inner_w >= 90) {
+            cfg4 << "  Operating Mode           : [" << (m_dry_run ? std::string(color::PURPLE) + "DRY-RUN (Monitoring Only)" : std::string(color::MINT) + "ACTIVE (Live Animation Lock Mitigation)") << color::RESET << "]"
+                 << color::MUTED << "  (Hotkey: [D] Toggle)" << color::RESET;
+        } else {
+            cfg4 << "  Operating Mode : [" << (m_dry_run ? std::string(color::PURPLE) + "DRY-RUN" : std::string(color::MINT) + "ACTIVE") << color::RESET << "]"
+                 << color::MUTED << "  ([D] Toggle)" << color::RESET;
+        }
         lines.push_back(make_box_row(cfg4.str(), inner_w));
 
         std::ostringstream cfg5;
-        cfg5 << "  Logging Verbosity        : [" << (m_config.verbose ? std::string(color::ACCENT) + "VERBOSE (All Actions)" : std::string(color::MUTED) + "CONCISE (Mitigations Only)") << color::RESET << "]"
-             << color::MUTED << "  (Hotkey: [L] Toggle)" << color::RESET;
+        if (inner_w >= 90) {
+            cfg5 << "  Logging Verbosity        : [" << (m_config.verbose ? std::string(color::ACCENT) + "VERBOSE (All Actions)" : std::string(color::MUTED) + "CONCISE (Mitigations Only)") << color::RESET << "]"
+                 << color::MUTED << "  (Hotkey: [L] Toggle)" << color::RESET;
+        } else {
+            cfg5 << "  Verbosity      : [" << (m_config.verbose ? std::string(color::ACCENT) + "VERBOSE" : std::string(color::MUTED) + "CONCISE") << color::RESET << "]"
+                 << color::MUTED << "  ([L] Toggle)" << color::RESET;
+        }
         lines.push_back(make_box_row(cfg5.str(), inner_w));
 
         lines.push_back(box_separator_line(cols));
 
         std::ostringstream cfg6;
-        cfg6 << "  Configuration Persistence: " << color::TARGET << ConfigManager::DEFAULT_CONFIG_FILENAME << color::RESET
-             << color::MUTED << "  (Hotkey: [S] Save configuration immediately)" << color::RESET;
+        if (inner_w >= 90) {
+            cfg6 << "  Configuration Persistence: " << color::TARGET << ConfigManager::DEFAULT_CONFIG_FILENAME << color::RESET
+                 << color::MUTED << "  (Hotkey: [S] Save configuration immediately)" << color::RESET;
+        } else {
+            cfg6 << "  Config File    : " << color::TARGET << ConfigManager::DEFAULT_CONFIG_FILENAME << color::RESET
+                 << color::MUTED << "  ([S] Save)" << color::RESET;
+        }
         lines.push_back(make_box_row(cfg6.str(), inner_w));
 
         std::ostringstream cfg7;
-        cfg7 << "  Telemetry Reset          : " << color::MUTED << "Clear counters and statistics (Hotkey: [C])" << color::RESET;
+        if (inner_w >= 90) {
+            cfg7 << "  Telemetry Reset          : " << color::MUTED << "Clear counters and statistics (Hotkey: [C])" << color::RESET;
+        } else {
+            cfg7 << "  Telemetry Reset: " << color::MUTED << "Clear statistics ([C])" << color::RESET;
+        }
         lines.push_back(make_box_row(cfg7.str(), inner_w));
     }
 
@@ -780,13 +954,23 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
 
     // Bottom hotkey toolbar
     std::ostringstream bar_ss;
-    bar_ss << color::GRAY << "Controls: "
-           << color::BOLD << "[Tab / 1..3]" << color::RESET << color::GRAY << " Tabs │ "
-           << color::BOLD << "[Q]" << color::RESET << color::GRAY << " Exit │ "
-           << color::BOLD << "[D]" << color::RESET << color::GRAY << " Dry-Run │ "
-           << color::BOLD << "[L]" << color::RESET << color::GRAY << " Verbose │ "
-           << color::BOLD << "[S]" << color::RESET << color::GRAY << " Save Settings │ "
-           << color::BOLD << "[C]" << color::RESET << color::GRAY << " Reset Stats" << color::RESET;
+    if (inner_w >= 90) {
+        bar_ss << color::GRAY << "Controls: "
+               << color::BOLD << "[1..3]" << color::RESET << color::GRAY << " Tabs │ "
+               << color::BOLD << "[Q]" << color::RESET << color::GRAY << " Exit │ "
+               << color::BOLD << "[D]" << color::RESET << color::GRAY << " Dry-Run │ "
+               << color::BOLD << "[L]" << color::RESET << color::GRAY << " Verbose │ "
+               << color::BOLD << "[S]" << color::RESET << color::GRAY << " Save │ "
+               << color::BOLD << "[C]" << color::RESET << color::GRAY << " Reset" << color::RESET;
+    } else {
+        bar_ss << color::GRAY
+               << color::BOLD << "[1..3]" << color::RESET << color::GRAY << " Tabs │ "
+               << color::BOLD << "[Q]" << color::RESET << color::GRAY << " Exit │ "
+               << color::BOLD << "[D]" << color::RESET << color::GRAY << " Dry │ "
+               << color::BOLD << "[L]" << color::RESET << color::GRAY << " Verb │ "
+               << color::BOLD << "[S]" << color::RESET << color::GRAY << " Save │ "
+               << color::BOLD << "[C]" << color::RESET << color::GRAY << " Reset" << color::RESET;
+    }
     lines.push_back(make_box_row(bar_ss.str(), inner_w));
 
     // Bottom border
