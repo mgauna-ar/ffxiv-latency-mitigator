@@ -634,22 +634,17 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
     const auto elapsed_secs = (m_session_start_time != std::chrono::steady_clock::time_point{}) ?
         std::chrono::duration_cast<std::chrono::seconds>(now - m_session_start_time) :
         std::chrono::seconds{0};
-    const double apm = calculate_apm();
 
     std::ostringstream kpi3;
     if (inner_w >= 90) {
         kpi3 << color::BOLD << color::TEXT << "DIAGNOSTICS: " << color::RESET
-             << "APM: " << color::TEXT << std::fixed << std::setprecision(1) << apm << color::RESET
-             << color::MUTED << " │ Uptime: " << color::TEXT << format_time_hhmmss(elapsed_secs) << color::RESET
+             << "Uptime: " << color::TEXT << format_time_hhmmss(elapsed_secs) << color::RESET
              << color::MUTED << " │ Floor: " << color::AMBER << m_guards.floor_clamps << color::RESET
-             << color::MUTED << " │ Spike: " << color::CORAL << m_guards.spike_filtered << color::RESET
-             << color::MUTED << " │ Cast: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
+             << color::MUTED << " │ Spike: " << color::CORAL << m_guards.spike_filtered << color::RESET;
     } else {
-        kpi3 << color::BOLD << color::TEXT << "APM: " << color::RESET << std::fixed << std::setprecision(1) << apm
-             << color::MUTED << " │ Up: " << color::TEXT << format_time_hhmmss(elapsed_secs) << color::RESET
+        kpi3 << color::BOLD << color::TEXT << "Up: " << color::RESET << color::TEXT << format_time_hhmmss(elapsed_secs) << color::RESET
              << color::MUTED << " │ Flr: " << color::AMBER << m_guards.floor_clamps << color::RESET
-             << color::MUTED << " │ Spk: " << color::CORAL << m_guards.spike_filtered << color::RESET
-             << color::MUTED << " │ Cst: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
+             << color::MUTED << " │ Spk: " << color::CORAL << m_guards.spike_filtered << color::RESET;
     }
     lines.push_back(make_box_row(kpi3.str(), inner_w));
 
@@ -1010,7 +1005,6 @@ void UiRenderer::render_final_report() {
         std::chrono::duration_cast<std::chrono::seconds>(now - m_session_start_time) :
         std::chrono::seconds{0};
 
-    const double apm = calculate_apm();
     const double mit_pct = (m_total_actions > 0) ?
         (static_cast<double>(m_actions_mitigated) / static_cast<double>(m_total_actions)) * 100.0 : 0.0;
     const double avg_reduction = (m_actions_mitigated > 0) ?
@@ -1035,7 +1029,7 @@ void UiRenderer::render_final_report() {
     std::cout << make_box_row(ss.str(), inner_w) << "\n";
 
     ss.str(""); ss.clear();
-    ss << "Total Actions:       " << m_total_actions << " actions (" << std::fixed << std::setprecision(1) << apm << " APM)";
+    ss << "Total Actions:       " << m_total_actions << " actions";
     std::cout << make_box_row(ss.str(), inner_w) << "\n";
 
     ss.str(""); ss.clear();
