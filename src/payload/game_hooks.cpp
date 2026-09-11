@@ -206,13 +206,14 @@ static void ProcessActionEffect(game::ActionEffectHeader* effect_header, float o
     }
 
     const float new_lock = SafeReadAnimationLock(mgr);
-    const bool lock_changed = (new_lock != old_lock);
-    const bool is_our_sequence = (effect_header->source_sequence != 0);
+    const bool lock_changed = (std::abs(new_lock - old_lock) > 0.0001f);
 
     // Zone-wide action effect isolation:
-    // Only mitigate if animation lock was actually changed or belongs to our sequence,
-    // and new lock is positive and finite
-    if ((!lock_changed && !is_our_sequence) || new_lock <= game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS || !std::isfinite(new_lock)) {
+    // In FFXIV, ReceiveActionEffect is invoked for all actions in the zone (party members, enemies, etc.).
+    // When an action affects the local player, the original function updates mgr->animation_lock.
+    // For actions of other entities, mgr->animation_lock remains untouched (old_lock == new_lock).
+    // We strictly require lock_changed to prevent external actions from polluting the combat stream.
+    if (!lock_changed || new_lock <= game::definitions::MIN_ACTION_EFFECT_LOCK_SECONDS || !std::isfinite(new_lock)) {
         return;
     }
 
