@@ -89,10 +89,12 @@ MitigationResult AnimationLockMitigator::calculate_mitigation(
         if (samples_before >= constants::MIN_SAMPLES_FOR_MEDIAN_FILTER) {
             const double median_rtt = m_rtt_tracker.get_median_rtt_ms();
             const double jitter = m_rtt_tracker.get_jitter_ms();
-            const double outlier_threshold = median_rtt + std::max(
+            const double outlier_tolerance = std::max({
                 constants::MIN_OUTLIER_TOLERANCE_MS,
+                median_rtt * 0.5,
                 constants::JITTER_SPIKE_MULTIPLIER * jitter
-            );
+            });
+            const double outlier_threshold = median_rtt + outlier_tolerance;
             if (effective_rtt > outlier_threshold) {
                 effective_rtt = median_rtt;
                 is_outlier = true;
