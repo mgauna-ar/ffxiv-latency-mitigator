@@ -640,14 +640,12 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
              << color::MUTED << " │ Uptime: " << color::TEXT << format_time_hhmmss(elapsed_secs) << color::RESET
              << color::MUTED << " │ Floor: " << color::AMBER << m_guards.floor_clamps << color::RESET
              << color::MUTED << " │ Spike: " << color::CORAL << m_guards.spike_filtered << color::RESET
-             << color::MUTED << " │ Cold: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
              << color::MUTED << " │ Cast: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
     } else {
         kpi3 << color::BOLD << color::TEXT << "APM: " << color::RESET << std::fixed << std::setprecision(1) << apm
              << color::MUTED << " │ Up: " << color::TEXT << format_time_hhmmss(elapsed_secs) << color::RESET
              << color::MUTED << " │ Flr: " << color::AMBER << m_guards.floor_clamps << color::RESET
              << color::MUTED << " │ Spk: " << color::CORAL << m_guards.spike_filtered << color::RESET
-             << color::MUTED << " │ Cld: " << color::ACCENT << m_guards.cold_start_guards << color::RESET
              << color::MUTED << " │ Cst: " << color::TARGET << m_guards.cast_locks_preserved << color::RESET;
     }
     lines.push_back(make_box_row(kpi3.str(), inner_w));
