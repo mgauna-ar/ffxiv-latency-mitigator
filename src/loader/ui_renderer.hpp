@@ -142,6 +142,7 @@ public:
     // Tab selection management
     [[nodiscard]] int active_tab() const;
     void set_active_tab(int tab_index);
+    void cycle_tab(int delta = 1);
 
     // Configuration management
     [[nodiscard]] MitigationConfig config() const;

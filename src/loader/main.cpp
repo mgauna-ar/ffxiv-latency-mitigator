@@ -119,7 +119,7 @@ void wait_for_user_exit() {
 
 constexpr int MAX_HANDSHAKE_WAIT_TICKS = 150;
 constexpr auto HANDSHAKE_POLL_INTERVAL = std::chrono::milliseconds(100);
-constexpr auto HOTKEY_POLL_INTERVAL = std::chrono::milliseconds(50);
+constexpr auto HOTKEY_POLL_INTERVAL = std::chrono::milliseconds(15);
 constexpr auto UNHOOK_DRAIN_DELAY = std::chrono::milliseconds(300);
 
 void print_help(const char* exe_name) {
@@ -173,19 +173,11 @@ struct ScopedHandle {
     explicit operator bool() const { return m_handle != nullptr && m_handle != INVALID_HANDLE_VALUE; }
 };
 
-/// Interruptible sleep that immediately returns early if user requests exit via Q or Ctrl+C
+/// Interruptible sleep that immediately returns early if exit is requested via Ctrl+C or g_keep_running
 bool interruptible_sleep(std::chrono::milliseconds duration) {
-    constexpr auto step = std::chrono::milliseconds(50);
+    constexpr auto step = std::chrono::milliseconds(20);
     auto remaining = duration;
     while (remaining > std::chrono::milliseconds(0) && g_keep_running.load()) {
-        if (_kbhit()) {
-            const int key = _getch();
-            if (key == 'q' || key == 'Q') {
-                std::cout << "\n[!] 'Q' pressed. Exiting...\n";
-                g_keep_running = false;
-                return false;
-            }
-        }
         const auto sleep_time = (std::min)(step, remaining);
         std::this_thread::sleep_for(sleep_time);
         remaining -= sleep_time;
@@ -212,31 +204,242 @@ template <typename F>
 std::optional<mitigator::loader::ProcessInfo> wait_for_target_process(uint32_t exclude_pid, F&& on_tick) {
     int denied_retries = 0;
     constexpr int MAX_DENIED_RETRIES = 10;
+    constexpr auto PROCESS_SCAN_INTERVAL = std::chrono::milliseconds(250);
+    constexpr auto TICK_INTERVAL = std::chrono::milliseconds(15);
+
+    auto last_scan = std::chrono::steady_clock::now() - PROCESS_SCAN_INTERVAL;
 
     while (g_keep_running.load()) {
-        auto proc = find_target_process(exclude_pid);
-        if (proc.has_value()) {
-            if (proc->handle != nullptr) {
-                return proc;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_scan >= PROCESS_SCAN_INTERVAL) {
+            last_scan = now;
+            auto proc = find_target_process(exclude_pid);
+            if (proc.has_value()) {
+                if (proc->handle != nullptr) {
+                    return proc;
+                }
+                if (++denied_retries >= MAX_DENIED_RETRIES) {
+                    return proc;
+                }
+            } else {
+                denied_retries = 0;
             }
-            if (++denied_retries >= MAX_DENIED_RETRIES) {
-                return proc;
-            }
-        } else {
-            denied_retries = 0;
         }
 
+        // Process keyboard inputs and UI animations with zero lag
         on_tick();
 
-        if (!interruptible_sleep(std::chrono::milliseconds(250))) {
+        if (!g_keep_running.load()) {
             return std::nullopt;
         }
+
+        std::this_thread::sleep_for(TICK_INTERVAL);
     }
     return std::nullopt;
 }
 
 inline std::optional<mitigator::loader::ProcessInfo> wait_for_target_process(uint32_t exclude_pid) {
     return wait_for_target_process(exclude_pid, []() {});
+}
+
+void process_extended_key(
+    int ext_key,
+    mitigator::loader::UiRenderer& ui,
+    bool dry_run,
+    bool verbose
+) {
+    switch (ext_key) {
+        case 75: // Left Arrow
+        case 72: // Up Arrow
+        case 15: // Shift+Tab
+            ui.cycle_tab(-1);
+            ui.render_dashboard(dry_run, verbose);
+            break;
+
+        case 77: // Right Arrow
+        case 80: // Down Arrow
+            ui.cycle_tab(1);
+            ui.render_dashboard(dry_run, verbose);
+            break;
+
+        default:
+            break;
+    }
+}
+
+void process_hotkey(
+    int key,
+    mitigator::loader::UiRenderer& ui,
+    mitigator::loader::LoaderIpcServer* ipc_server,
+    double& target_ping_ms,
+    double& min_lock_ms,
+    bool& dry_run,
+    bool& verbose
+) {
+    switch (key) {
+        case 'q':
+        case 'Q':
+            g_keep_running = false;
+            break;
+
+        case '1':
+            ui.set_active_tab(0);
+            ui.render_dashboard(dry_run, verbose);
+            break;
+
+        case '2':
+            ui.set_active_tab(1);
+            ui.render_dashboard(dry_run, verbose);
+            break;
+
+        case '3':
+            ui.set_active_tab(2);
+            ui.render_dashboard(dry_run, verbose);
+            break;
+
+        case '\t': // Tab key: cycle forward
+            ui.cycle_tab(1);
+            ui.render_dashboard(dry_run, verbose);
+            break;
+
+        case 'd':
+        case 'D':
+            dry_run = !dry_run;
+            if (ipc_server) {
+                ipc_server->set_dry_run(dry_run);
+            } else {
+                ui.set_session_info(0, 0, target_ping_ms, dry_run);
+            }
+            if (ui.is_dashboard_mode()) {
+                ui.render_dashboard(dry_run, verbose);
+            } else {
+                ui.log_status(std::string("Dry-Run toggled: ") + (dry_run ? "ENABLED" : "DISABLED"));
+                ui.render_hotkey_bar(dry_run, verbose);
+            }
+            break;
+
+        case 'l':
+        case 'L':
+            verbose = !verbose;
+            if (ipc_server) {
+                ipc_server->set_verbose(verbose);
+            }
+            if (ui.is_dashboard_mode()) {
+                ui.render_dashboard(dry_run, verbose);
+            } else {
+                ui.log_status(std::string("Verbose logging: ") + (verbose ? "ENABLED" : "DISABLED"));
+                ui.render_hotkey_bar(dry_run, verbose);
+            }
+            break;
+
+        case 'c':
+        case 'C':
+            ui.reset_stats();
+            if (ipc_server) {
+                ipc_server->reset_stats();
+            }
+            if (ui.is_dashboard_mode()) {
+                ui.render_dashboard(dry_run, verbose);
+            } else {
+                ui.log_status("Session statistics cleared.");
+            }
+            break;
+
+        case 's':
+        case 'S':
+            mitigator::ConfigManager::save_to_file(mitigator::ConfigManager::DEFAULT_CONFIG_FILENAME, ui.config());
+            if (ui.is_dashboard_mode()) {
+                ui.set_connection_status("Configuration saved to mitigator_config.json");
+                ui.render_dashboard(dry_run, verbose);
+            } else {
+                ui.log_status("Saved settings to mitigator_config.json");
+            }
+            break;
+
+        case 'f': {
+            auto cfg = ui.config();
+            cfg.min_animation_lock_ms = (std::max)(10.0, cfg.min_animation_lock_ms - 5.0);
+            ui.set_config(cfg);
+            min_lock_ms = cfg.min_animation_lock_ms;
+            if (ipc_server) {
+                ipc_server->set_min_lock(static_cast<float>(min_lock_ms));
+            }
+            ui.render_dashboard(dry_run, verbose);
+            break;
+        }
+        case 'F': {
+            auto cfg = ui.config();
+            cfg.min_animation_lock_ms = (std::min)(100.0, cfg.min_animation_lock_ms + 5.0);
+            ui.set_config(cfg);
+            min_lock_ms = cfg.min_animation_lock_ms;
+            if (ipc_server) {
+                ipc_server->set_min_lock(static_cast<float>(min_lock_ms));
+            }
+            ui.render_dashboard(dry_run, verbose);
+            break;
+        }
+        case 'p': {
+            auto cfg = ui.config();
+            cfg.target_ping_ms = (std::max)(5.0, cfg.target_ping_ms - 5.0);
+            ui.set_config(cfg);
+            target_ping_ms = cfg.target_ping_ms;
+            if (ipc_server) {
+                ipc_server->set_target_ping(static_cast<float>(target_ping_ms));
+            } else {
+                ui.set_session_info(0, 0, target_ping_ms, dry_run);
+            }
+            ui.render_dashboard(dry_run, verbose);
+            break;
+        }
+        case 'P': {
+            auto cfg = ui.config();
+            cfg.target_ping_ms = (std::min)(100.0, cfg.target_ping_ms + 5.0);
+            ui.set_config(cfg);
+            target_ping_ms = cfg.target_ping_ms;
+            if (ipc_server) {
+                ipc_server->set_target_ping(static_cast<float>(target_ping_ms));
+            } else {
+                ui.set_session_info(0, 0, target_ping_ms, dry_run);
+            }
+            ui.render_dashboard(dry_run, verbose);
+            break;
+        }
+        case 'm': {
+            auto cfg = ui.config();
+            cfg.safety_margin_ms = (std::max)(0.0, cfg.safety_margin_ms - 1.0);
+            ui.set_config(cfg);
+            ui.render_dashboard(dry_run, verbose);
+            break;
+        }
+        case 'M': {
+            auto cfg = ui.config();
+            cfg.safety_margin_ms = (std::min)(20.0, cfg.safety_margin_ms + 1.0);
+            ui.set_config(cfg);
+            ui.render_dashboard(dry_run, verbose);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+void poll_keyboard_inputs(
+    mitigator::loader::UiRenderer& ui,
+    mitigator::loader::LoaderIpcServer* ipc_server,
+    double& target_ping_ms,
+    double& min_lock_ms,
+    bool& dry_run,
+    bool& verbose
+) {
+    while (_kbhit() && g_keep_running.load()) {
+        const int key = _getch();
+        if (key == 0 || key == 0xE0) {
+            const int ext_key = _getch();
+            process_extended_key(ext_key, ui, dry_run, verbose);
+        } else {
+            process_hotkey(key, ui, ipc_server, target_ping_ms, min_lock_ms, dry_run, verbose);
+        }
+    }
 }
 
 } // anonymous namespace
@@ -366,93 +569,7 @@ int main(int argc, char* argv[]) {
         ui.render_dashboard(dry_run, verbose);
 
         auto on_search_tick = [&]() {
-            if (_kbhit()) {
-                const int key = _getch();
-                switch (key) {
-                    case 'q':
-                    case 'Q':
-                        g_keep_running = false;
-                        break;
-                    case '1':
-                        ui.set_active_tab(0);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case '2':
-                        ui.set_active_tab(1);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case '3':
-                        ui.set_active_tab(2);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case 'd':
-                    case 'D':
-                        dry_run = !dry_run;
-                        ui.set_session_info(0, 0, target_ping_ms, dry_run);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case 'l':
-                    case 'L':
-                        verbose = !verbose;
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case 'c':
-                    case 'C':
-                        ui.reset_stats();
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case 's':
-                    case 'S':
-                        mitigator::ConfigManager::save_to_file(mitigator::ConfigManager::DEFAULT_CONFIG_FILENAME, ui.config());
-                        ui.set_connection_status("Configuration saved to mitigator_config.json");
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case 'f': {
-                        auto cfg = ui.config();
-                        cfg.min_animation_lock_ms = (std::max)(10.0, cfg.min_animation_lock_ms - 5.0);
-                        ui.set_config(cfg);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'F': {
-                        auto cfg = ui.config();
-                        cfg.min_animation_lock_ms = (std::min)(100.0, cfg.min_animation_lock_ms + 5.0);
-                        ui.set_config(cfg);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'p': {
-                        auto cfg = ui.config();
-                        cfg.target_ping_ms = (std::max)(5.0, cfg.target_ping_ms - 5.0);
-                        ui.set_config(cfg);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'P': {
-                        auto cfg = ui.config();
-                        cfg.target_ping_ms = (std::min)(100.0, cfg.target_ping_ms + 5.0);
-                        ui.set_config(cfg);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'm': {
-                        auto cfg = ui.config();
-                        cfg.safety_margin_ms = (std::max)(0.0, cfg.safety_margin_ms - 1.0);
-                        ui.set_config(cfg);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'M': {
-                        auto cfg = ui.config();
-                        cfg.safety_margin_ms = (std::min)(20.0, cfg.safety_margin_ms + 1.0);
-                        ui.set_config(cfg);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    default:
-                        break;
-                }
-            }
+            poll_keyboard_inputs(ui, nullptr, target_ping_ms, min_lock_ms, dry_run, verbose);
         };
 
         auto proc = wait_for_target_process(last_pid, on_search_tick);
@@ -671,119 +788,8 @@ int main(int argc, char* argv[]) {
             }
 
             if (_kbhit()) {
-                const int key = _getch();
-                switch (key) {
-                    case 'q':
-                    case 'Q':
-                        g_keep_running = false;
-                        break;
-                    case '1':
-                        ui.set_active_tab(0);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case '2':
-                        ui.set_active_tab(1);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case '3':
-                        ui.set_active_tab(2);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    case 'd':
-                    case 'D':
-                        dry_run = !dry_run;
-                        ipc_server.set_dry_run(dry_run);
-                        if (ui.is_dashboard_mode()) {
-                            ui.render_dashboard(dry_run, verbose);
-                        } else {
-                            ui.log_status(std::string("Dry-Run toggled: ") + (dry_run ? "ENABLED" : "DISABLED"));
-                            ui.render_hotkey_bar(dry_run, verbose);
-                        }
-                        break;
-                    case 'l':
-                    case 'L':
-                        verbose = !verbose;
-                        ipc_server.set_verbose(verbose);
-                        if (ui.is_dashboard_mode()) {
-                            ui.render_dashboard(dry_run, verbose);
-                        } else {
-                            ui.log_status(std::string("Verbose logging: ") + (verbose ? "ENABLED" : "DISABLED"));
-                            ui.render_hotkey_bar(dry_run, verbose);
-                        }
-                        break;
-                    case 'c':
-                    case 'C':
-                        ui.reset_stats();
-                        ipc_server.reset_stats();
-                        if (ui.is_dashboard_mode()) {
-                            ui.render_dashboard(dry_run, verbose);
-                        } else {
-                            ui.log_status("Session statistics cleared.");
-                        }
-                        break;
-                    case 's':
-                    case 'S':
-                        mitigator::ConfigManager::save_to_file(mitigator::ConfigManager::DEFAULT_CONFIG_FILENAME, ui.config());
-                        if (ui.is_dashboard_mode()) {
-                            ui.set_connection_status("Configuration saved to mitigator_config.json");
-                            ui.render_dashboard(dry_run, verbose);
-                        } else {
-                            ui.log_status("Saved settings to mitigator_config.json");
-                        }
-                        break;
-                    case 'f': {
-                        auto cfg = ui.config();
-                        cfg.min_animation_lock_ms = (std::max)(10.0, cfg.min_animation_lock_ms - 5.0);
-                        ui.set_config(cfg);
-                        min_lock_ms = cfg.min_animation_lock_ms;
-                        ipc_server.set_min_lock(static_cast<float>(min_lock_ms));
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'F': {
-                        auto cfg = ui.config();
-                        cfg.min_animation_lock_ms = (std::min)(100.0, cfg.min_animation_lock_ms + 5.0);
-                        ui.set_config(cfg);
-                        min_lock_ms = cfg.min_animation_lock_ms;
-                        ipc_server.set_min_lock(static_cast<float>(min_lock_ms));
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'p': {
-                        auto cfg = ui.config();
-                        cfg.target_ping_ms = (std::max)(5.0, cfg.target_ping_ms - 5.0);
-                        ui.set_config(cfg);
-                        target_ping_ms = cfg.target_ping_ms;
-                        ipc_server.set_target_ping(static_cast<float>(target_ping_ms));
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'P': {
-                        auto cfg = ui.config();
-                        cfg.target_ping_ms = (std::min)(100.0, cfg.target_ping_ms + 5.0);
-                        ui.set_config(cfg);
-                        target_ping_ms = cfg.target_ping_ms;
-                        ipc_server.set_target_ping(static_cast<float>(target_ping_ms));
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'm': {
-                        auto cfg = ui.config();
-                        cfg.safety_margin_ms = (std::max)(0.0, cfg.safety_margin_ms - 1.0);
-                        ui.set_config(cfg);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    case 'M': {
-                        auto cfg = ui.config();
-                        cfg.safety_margin_ms = (std::min)(20.0, cfg.safety_margin_ms + 1.0);
-                        ui.set_config(cfg);
-                        ui.render_dashboard(dry_run, verbose);
-                        break;
-                    }
-                    default:
-                        break;
-                }
+                poll_keyboard_inputs(ui, &ipc_server, target_ping_ms, min_lock_ms, dry_run, verbose);
+                last_dashboard_render = std::chrono::steady_clock::now();
             }
             std::this_thread::sleep_for(HOTKEY_POLL_INTERVAL);
         }

@@ -419,3 +419,25 @@ TEST_CASE(UiRenderer, SettingsAndConfigurationCallbacks) {
     TEST_ASSERT(config_callback_called);
 }
 
+TEST_CASE(UiRenderer, CycleTabNavigation) {
+    mitigator::loader::UiRenderer renderer;
+    TEST_ASSERT(renderer.active_tab() == 0);
+
+    // Forward cycle
+    renderer.cycle_tab(1);
+    TEST_ASSERT(renderer.active_tab() == 1);
+    renderer.cycle_tab(1);
+    TEST_ASSERT(renderer.active_tab() == 2);
+    renderer.cycle_tab(1);
+    TEST_ASSERT(renderer.active_tab() == 0);
+
+    // Backward cycle
+    renderer.cycle_tab(-1);
+    TEST_ASSERT(renderer.active_tab() == 2);
+    renderer.cycle_tab(-1);
+    TEST_ASSERT(renderer.active_tab() == 1);
+    renderer.cycle_tab(-1);
+    TEST_ASSERT(renderer.active_tab() == 0);
+}
+
+

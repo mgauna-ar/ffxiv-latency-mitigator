@@ -191,6 +191,12 @@ void UiRenderer::set_active_tab(int tab_index) {
     m_dirty = true;
 }
 
+void UiRenderer::cycle_tab(int delta) {
+    std::lock_guard<std::recursive_mutex> lock(m_render_mutex);
+    m_active_tab = (m_active_tab + (delta % 3) + 3) % 3;
+    m_dirty = true;
+}
+
 MitigationConfig UiRenderer::config() const {
     std::lock_guard<std::recursive_mutex> lock(m_render_mutex);
     return m_config;
@@ -797,7 +803,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
     // Bottom hotkey toolbar
     std::ostringstream bar_ss;
     bar_ss << color::GRAY << "Controls: "
-           << color::BOLD << "[1..3]" << color::RESET << color::GRAY << " Tabs │ "
+           << color::BOLD << "[Tab / 1..3]" << color::RESET << color::GRAY << " Tabs │ "
            << color::BOLD << "[Q]" << color::RESET << color::GRAY << " Exit │ "
            << color::BOLD << "[D]" << color::RESET << color::GRAY << " Dry-Run │ "
            << color::BOLD << "[L]" << color::RESET << color::GRAY << " Verbose │ "
@@ -814,8 +820,10 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
 void UiRenderer::render_dashboard(bool dry_run, bool verbose) {
     (void)dry_run;
     (void)verbose;
+    std::lock_guard<std::recursive_mutex> lock(m_render_mutex);
     std::string snapshot = render_snapshot_to_string(static_cast<int>(m_cols), static_cast<int>(m_rows));
     std::cout << color::HIDE_CURSOR << "\033[H" << snapshot << std::flush;
+    m_dirty = false;
 }
 
 void UiRenderer::render_final_report() {
