@@ -402,6 +402,40 @@ TEST_CASE(UiRenderer, SparklineHistoryRingBuffer) {
     // Test Unicode sparkline rendering helper
     std::string sparkline = mitigator::loader::UiRenderer::render_sparkline_bar(history, 60);
     TEST_ASSERT(!sparkline.empty());
+    // Ensure no unsupported partial blocks are generated
+    TEST_ASSERT(sparkline.find("▆") == std::string::npos);
+    TEST_ASSERT(sparkline.find("▂") == std::string::npos);
+}
+
+TEST_CASE(UiRenderer, WaveformDynamicScalingAndSafeGlyphs) {
+    mitigator::loader::UiRenderer renderer;
+    renderer.set_active_tab(1); // Tab 1: Latency Analytics
+
+    // Simulate high latency gameplay (e.g. ~390ms median)
+    for (int i = 0; i < 60; ++i) {
+        mitigator::ipc::TelemetryPayload t{};
+        t.action_id = 0x1A;
+        t.measured_rtt_ms = 360.0f + static_cast<float>((i % 10) * 8); // 360ms to 432ms
+        t.smoothed_rtt_ms = 390.0f;
+        t.applied = 1;
+        renderer.log_action(t, false);
+    }
+
+    std::string snapshot = renderer.render_snapshot_to_string(100, 30);
+
+    // Tab 1 must display waveform with dynamic median-centered thresholds
+    TEST_ASSERT(snapshot.find("REAL-TIME LATENCY WAVEFORM") != std::string::npos);
+    TEST_ASSERT(snapshot.find("Trend  ┤") != std::string::npos);
+    // Should NOT have hardcoded 80ms/200ms/350ms on a 390ms connection
+    TEST_ASSERT(snapshot.find(" 80ms  ┤") == std::string::npos);
+    // Should contain high thresholds (~420ms+)
+    TEST_ASSERT(snapshot.find("ms+ ┤") != std::string::npos);
+
+    // Ensure unsupported partial-height block glyphs are never rendered
+    TEST_ASSERT(snapshot.find("▆") == std::string::npos);
+    TEST_ASSERT(snapshot.find("▂") == std::string::npos);
+    TEST_ASSERT(snapshot.find("▅") == std::string::npos);
+    TEST_ASSERT(snapshot.find("▃") == std::string::npos);
 }
 
 TEST_CASE(UiRenderer, SettingsAndConfigurationCallbacks) {

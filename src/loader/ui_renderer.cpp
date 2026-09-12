@@ -438,8 +438,11 @@ void UiRenderer::render_hotkey_bar(bool dry_run, bool verbose) {
 }
 
 std::string UiRenderer::render_sparkline_bar(const std::vector<float>& samples, size_t width) {
+    // CP437 / ANSI-safe shade characters supported universally across all Windows console fonts
+    // (Consolas, Lucida Console, raster fonts, Windows Terminal, PowerShell, cmd):
+    // U+2591 (░ light shade), U+2592 (▒ medium shade), U+2593 (▓ dark shade), U+2588 (█ full block)
     static constexpr const char* BLOCKS[] = {
-        " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"
+        "░", "▒", "▓", "█"
     };
     if (samples.empty() || width == 0) {
         return "";
@@ -447,31 +450,36 @@ std::string UiRenderer::render_sparkline_bar(const std::vector<float>& samples, 
     const size_t count = (std::min)(samples.size(), width);
     const size_t start = samples.size() - count;
 
-    float min_val = 0.0f;
-    float max_val = 150.0f;
+    float min_val = samples[start];
+    float max_val = samples[start];
     for (size_t i = start; i < samples.size(); ++i) {
+        if (samples[i] < min_val) {
+            min_val = samples[i];
+        }
         if (samples[i] > max_val) {
             max_val = samples[i];
         }
     }
-    if (max_val <= min_val) {
-        max_val = min_val + 1.0f;
+    if (max_val - min_val < 5.0f) {
+        max_val = min_val + 5.0f;
     }
+
+    const float spread = max_val - min_val;
+    const float mid_thresh = min_val + spread * 0.45f;
+    const float high_thresh = min_val + spread * 0.75f;
 
     std::string out;
     for (size_t i = start; i < samples.size(); ++i) {
         const float val = samples[i];
         const char* col = color::MINT;
-        if (val > 150.0f) {
+        if (val >= high_thresh) {
             col = color::CORAL;
-        } else if (val > 100.0f) {
-            col = color::AMBER;
-        } else if (val > 60.0f) {
+        } else if (val >= mid_thresh) {
             col = color::ACCENT;
         }
 
-        size_t idx = static_cast<size_t>((val - min_val) / (max_val - min_val) * 7.99f);
-        idx = std::clamp(idx, size_t{0}, size_t{7});
+        size_t idx = static_cast<size_t>((val - min_val) / spread * 3.99f);
+        idx = std::clamp(idx, size_t{0}, size_t{3});
         out += col;
         out += BLOCKS[idx];
     }
@@ -765,34 +773,67 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
             lines.push_back(make_box_row("", inner_w));
             lines.push_back(make_box_row("", inner_w));
         } else {
-            // Row 3: 350ms+
-            std::string row3 = "  350ms+ ┤ ";
-            for (size_t i = (hist.size() > sparkline_width ? hist.size() - sparkline_width : 0); i < hist.size(); ++i) {
-                if (hist[i] >= 350.0f) row3 += std::string(color::CORAL) + "█" + color::RESET;
-                else if (hist[i] >= 280.0f) row3 += std::string(color::AMBER) + "▆" + color::RESET;
-                else row3 += " ";
+            const size_t count = (std::min)(hist.size(), sparkline_width);
+            const size_t start_idx = hist.size() - count;
+
+            std::vector<float> visible_samples(hist.begin() + static_cast<ptrdiff_t>(start_idx), hist.end());
+            std::sort(visible_samples.begin(), visible_samples.end());
+            float win_median = visible_samples[visible_samples.size() / 2];
+            float win_min = visible_samples.front();
+            float win_max = visible_samples.back();
+
+            if (win_median <= 0.0f) {
+                win_median = (rtt_dist.median_val > 0.0f) ? rtt_dist.median_val : 100.0f;
+            }
+
+            // Calculate adaptive thresholds centered around the local median
+            float dynamic_delta = std::max({ 15.0f, (win_max - win_min) / 3.0f, win_median * 0.08f });
+            float delta = std::max(15.0f, std::round(dynamic_delta / 5.0f) * 5.0f);
+
+            float mid_thresh = std::max(15.0f, std::round(win_median / 5.0f) * 5.0f);
+            float low_thresh = std::max(10.0f, mid_thresh - delta);
+            float high_thresh = mid_thresh + delta;
+
+            char label_buf[32];
+
+            // Row 3: High / Spike tier
+            std::snprintf(label_buf, sizeof(label_buf), " %4dms+ ┤ ", static_cast<int>(high_thresh));
+            std::string row3(label_buf);
+            for (size_t i = start_idx; i < hist.size(); ++i) {
+                if (hist[i] >= high_thresh) {
+                    row3 += std::string(color::CORAL) + "█" + color::RESET;
+                } else {
+                    row3 += " ";
+                }
             }
             lines.push_back(make_box_row(row3, inner_w));
 
-            // Row 2: 200ms - 350ms
-            std::string row2 = "  200ms  ┤ ";
-            for (size_t i = (hist.size() > sparkline_width ? hist.size() - sparkline_width : 0); i < hist.size(); ++i) {
-                if (hist[i] >= 200.0f) row2 += std::string(color::ACCENT) + "█" + color::RESET;
-                else if (hist[i] >= 140.0f) row2 += std::string(color::MINT) + "▄" + color::RESET;
-                else row2 += " ";
+            // Row 2: Mid / Baseline tier
+            std::snprintf(label_buf, sizeof(label_buf), " %4dms  ┤ ", static_cast<int>(mid_thresh));
+            std::string row2(label_buf);
+            for (size_t i = start_idx; i < hist.size(); ++i) {
+                if (hist[i] >= mid_thresh) {
+                    row2 += std::string(color::ACCENT) + "█" + color::RESET;
+                } else {
+                    row2 += " ";
+                }
             }
             lines.push_back(make_box_row(row2, inner_w));
 
-            // Row 1: 80ms - 200ms
-            std::string row1 = "   80ms  ┤ ";
-            for (size_t i = (hist.size() > sparkline_width ? hist.size() - sparkline_width : 0); i < hist.size(); ++i) {
-                if (hist[i] >= 80.0f) row1 += std::string(color::MINT) + "█" + color::RESET;
-                else row1 += std::string(color::MINT) + "▂" + color::RESET;
+            // Row 1: Low / Fast tier
+            std::snprintf(label_buf, sizeof(label_buf), " %4dms  ┤ ", static_cast<int>(low_thresh));
+            std::string row1(label_buf);
+            for (size_t i = start_idx; i < hist.size(); ++i) {
+                if (hist[i] >= low_thresh) {
+                    row1 += std::string(color::MINT) + "█" + color::RESET;
+                } else {
+                    row1 += std::string(color::MINT) + "░" + color::RESET;
+                }
             }
             lines.push_back(make_box_row(row1, inner_w));
 
-            // Sparkline bar line
-            std::string sparkline_row = "  Waveform: " + render_sparkline_bar(hist, sparkline_width);
+            // Sparkline / micro-trend line
+            std::string sparkline_row = "  Trend  ┤ " + render_sparkline_bar(hist, sparkline_width);
             lines.push_back(make_box_row(sparkline_row, inner_w));
         }
 
