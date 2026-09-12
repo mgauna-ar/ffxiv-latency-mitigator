@@ -716,9 +716,9 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                                << color::MINT << std::setw(5) << entry.adjusted_lock_ms << "ms" << color::MUTED << " │ ";
 
                         if (entry.delay_reduced_ms > 0) {
-                            row_ss << color::MINT << color::BOLD << "-" << std::fixed << std::setprecision(1) << std::setw(5) << entry.delay_reduced_ms << "ms" << color::RESET << color::MUTED << " │ ";
+                            row_ss << color::MINT << color::BOLD << " " << std::fixed << std::setprecision(1) << std::setw(5) << entry.delay_reduced_ms << "ms" << color::RESET << color::MUTED << " │ ";
                         } else {
-                            row_ss << color::MUTED << " +0.0ms  │ ";
+                            row_ss << color::MUTED << "   0.0ms │ ";
                         }
 
                         row_ss << color::TEXT << std::setw(3) << static_cast<int>(entry.measured_rtt_ms) << "ms("
@@ -731,9 +731,9 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                                << color::MINT << std::setw(5) << entry.adjusted_lock_ms << "m" << color::MUTED << "│";
 
                         if (entry.delay_reduced_ms > 0) {
-                            row_ss << color::MINT << "-" << std::fixed << std::setprecision(1) << std::setw(5) << entry.delay_reduced_ms << "m" << color::MUTED << "│";
+                            row_ss << color::MINT << " " << std::fixed << std::setprecision(1) << std::setw(5) << entry.delay_reduced_ms << "m" << color::MUTED << "│";
                         } else {
-                            row_ss << color::MUTED << " +0.0m │";
+                            row_ss << color::MUTED << "  0.0m │";
                         }
 
                         row_ss << color::TEXT << std::setw(3) << static_cast<int>(entry.measured_rtt_ms) << "m("
@@ -1323,7 +1323,7 @@ std::string UiRenderer::format_action_line(const ActionLogEntry& entry) {
        << " | "
        << "Orig: " << std::fixed << std::setprecision(1) << entry.original_lock_ms << "ms -> "
        << color::GREEN << entry.adjusted_lock_ms << "ms" << color::RESET
-       << " | Saved: " << color::YELLOW << color::BOLD << "+" << entry.delay_reduced_ms << "ms" << color::RESET
+       << " | Saved: " << color::YELLOW << color::BOLD << entry.delay_reduced_ms << "ms" << color::RESET
        << " | RTT: " << entry.measured_rtt_ms << "ms (smooth: " << entry.smoothed_rtt_ms << "ms)";
 
     if (entry.clamped_floor) {
