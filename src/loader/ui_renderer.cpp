@@ -590,8 +590,10 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
     lines.push_back(make_box_row(kpi1.str(), inner_w));
 
     // 8. KPI Row 2: Mitigation & Throughput
-    const float mit_ratio = (m_total_actions > 0) ?
-        static_cast<float>(m_actions_mitigated) / static_cast<float>(m_total_actions) : 0.0f;
+    const uint64_t cast_locks = m_guards.cast_locks_preserved;
+    const uint64_t eligible_actions = (m_total_actions > cast_locks) ? (m_total_actions - cast_locks) : 0;
+    const float mit_ratio = (eligible_actions > 0) ?
+        static_cast<float>(m_actions_mitigated) / static_cast<float>(eligible_actions) : 0.0f;
     const double avg_reduction = m_actions_mitigated > 0 ?
         (m_cumulative_time_saved_ms / static_cast<double>(m_actions_mitigated)) : 0.0;
 
@@ -601,7 +603,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         kpi2 << color::BOLD << color::TEXT << "MITIGATION & THROUGHPUT: " << color::RESET
              << "Mitigated " << mit_bar << " " << color::MINT << std::fixed << std::setprecision(0)
              << (mit_ratio * 100.0f) << "%" << color::RESET
-             << color::MUTED << " (" << m_actions_mitigated << "/" << m_total_actions << ")"
+             << color::MUTED << " (" << m_actions_mitigated << "/" << (eligible_actions > 0 ? eligible_actions : m_total_actions) << ")"
              << " │ Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
              << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
              << color::MUTED << " (Avg: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::MUTED << ")"
@@ -611,7 +613,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         kpi2 << color::BOLD << color::TEXT << "MITIGATION: " << color::RESET
              << mit_bar << " " << color::MINT << std::fixed << std::setprecision(0)
              << (mit_ratio * 100.0f) << "%" << color::RESET
-             << color::MUTED << " (" << m_actions_mitigated << "/" << m_total_actions << ")"
+             << color::MUTED << " (" << m_actions_mitigated << "/" << (eligible_actions > 0 ? eligible_actions : m_total_actions) << ")"
              << " │ Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
              << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
              << color::MUTED << " (Avg: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::MUTED << ")"
@@ -621,7 +623,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         kpi2 << color::BOLD << color::TEXT << "MIT: " << color::RESET
              << mit_bar << " " << color::MINT << std::fixed << std::setprecision(0)
              << (mit_ratio * 100.0f) << "%" << color::RESET
-             << color::MUTED << " (" << m_actions_mitigated << "/" << m_total_actions << ")"
+             << color::MUTED << " (" << m_actions_mitigated << "/" << (eligible_actions > 0 ? eligible_actions : m_total_actions) << ")"
              << " │ Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
              << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
              << color::MUTED << " (Avg " << color::TEXT << std::fixed << std::setprecision(0) << avg_reduction << "ms" << color::MUTED << ")"
@@ -1005,8 +1007,10 @@ void UiRenderer::render_final_report() {
         std::chrono::duration_cast<std::chrono::seconds>(now - m_session_start_time) :
         std::chrono::seconds{0};
 
-    const double mit_pct = (m_total_actions > 0) ?
-        (static_cast<double>(m_actions_mitigated) / static_cast<double>(m_total_actions)) * 100.0 : 0.0;
+    const uint64_t cast_locks = m_guards.cast_locks_preserved;
+    const uint64_t eligible_actions = (m_total_actions > cast_locks) ? (m_total_actions - cast_locks) : 0;
+    const double mit_pct = (eligible_actions > 0) ?
+        (static_cast<double>(m_actions_mitigated) / static_cast<double>(eligible_actions)) * 100.0 : 0.0;
     const double avg_reduction = (m_actions_mitigated > 0) ?
         (m_cumulative_time_saved_ms / static_cast<double>(m_actions_mitigated)) : 0.0;
 
@@ -1033,7 +1037,12 @@ void UiRenderer::render_final_report() {
     std::cout << make_box_row(ss.str(), inner_w) << "\n";
 
     ss.str(""); ss.clear();
-    ss << "Actions Mitigated:   " << m_actions_mitigated << " (" << std::fixed << std::setprecision(1) << mit_pct << "%)";
+    ss << "Actions Mitigated:   " << m_actions_mitigated;
+    if (cast_locks > 0) {
+        ss << "/" << eligible_actions << " eligible (" << std::fixed << std::setprecision(1) << mit_pct << "%)";
+    } else {
+        ss << " (" << std::fixed << std::setprecision(1) << mit_pct << "%)";
+    }
     std::cout << make_box_row(ss.str(), inner_w) << "\n";
 
     ss.str(""); ss.clear();
