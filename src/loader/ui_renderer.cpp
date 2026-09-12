@@ -574,6 +574,16 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
              << " │ Target: " << color::TEXT << std::fixed << std::setprecision(0) << m_target_ping_ms << "ms"
              << color::MUTED << " │ RTT Med/P95/Max: " << color::TEXT << std::fixed << std::setprecision(0)
              << rtt_dist.median_val << "/" << rtt_dist.p95_val << "/" << rtt_dist.max_val << "ms" << color::RESET;
+    } else if (inner_w >= 98) {
+        const std::string ping_bar = make_bar(m_last_smoothed_rtt, 500.0f, 8, color::ACCENT);
+        kpi1 << color::BOLD << color::TEXT << "RTT: " << color::RESET
+             << ping_bar << " " << color::TEXT << std::fixed << std::setprecision(1)
+             << std::setw(5) << m_last_smoothed_rtt << "ms" << color::RESET
+             << " " << quality_color << quality_str << color::RESET
+             << color::MUTED << " (±" << std::fixed << std::setprecision(1) << m_last_jitter << "ms)"
+             << " │ Target: " << color::TEXT << std::fixed << std::setprecision(0) << m_target_ping_ms << "ms"
+             << color::MUTED << " │ RTT Med/P95/Max: " << color::TEXT << std::fixed << std::setprecision(0)
+             << rtt_dist.median_val << "/" << rtt_dist.p95_val << "/" << rtt_dist.max_val << "ms" << color::RESET;
     } else if (inner_w >= 90) {
         const std::string ping_bar = make_bar(m_last_smoothed_rtt, 500.0f, 6, color::ACCENT);
         kpi1 << color::BOLD << color::TEXT << "RTT: " << color::RESET
@@ -610,6 +620,16 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
         const std::string mit_bar = make_bar(mit_ratio, 1.0f, 8, color::MINT);
         kpi2 << color::BOLD << color::TEXT << "MITIGATION & THROUGHPUT: " << color::RESET
              << "Mitigated " << mit_bar << " " << color::MINT << std::fixed << std::setprecision(0)
+             << (mit_ratio * 100.0f) << "%" << color::RESET
+             << color::MUTED << " (" << m_actions_mitigated << "/" << (eligible_actions > 0 ? eligible_actions : m_total_actions) << ")"
+             << " │ Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
+             << (m_cumulative_time_saved_ms / constants::MS_PER_SECOND) << "s" << color::RESET
+             << color::MUTED << " (Avg: " << color::TEXT << std::fixed << std::setprecision(1) << avg_reduction << "ms" << color::MUTED << ")"
+             << " │ Total Actions: " << color::TEXT << m_total_actions << color::RESET;
+    } else if (inner_w >= 98) {
+        const std::string mit_bar = make_bar(mit_ratio, 1.0f, 8, color::MINT);
+        kpi2 << color::BOLD << color::TEXT << "MITIGATION: " << color::RESET
+             << mit_bar << " " << color::MINT << std::fixed << std::setprecision(0)
              << (mit_ratio * 100.0f) << "%" << color::RESET
              << color::MUTED << " (" << m_actions_mitigated << "/" << (eligible_actions > 0 ? eligible_actions : m_total_actions) << ")"
              << " │ Saved: " << color::MINT << color::BOLD << std::fixed << std::setprecision(2)
@@ -712,7 +732,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                         row_ss << color::MUTED << entry.timestamp_str << " │ "
                                << color::TEXT << "#" << std::setw(4) << std::setfill('0') << entry.index << std::setfill(' ') << color::MUTED << " │ "
                                << color::TARGET << "0x" << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << entry.action_id << std::setfill(' ') << std::dec << color::MUTED << " │ "
-                               << " " << color::TEXT << std::fixed << std::setprecision(1) << std::setw(5) << entry.original_lock_ms << "ms➔"
+                               << " " << color::TEXT << std::fixed << std::setprecision(1) << std::setw(5) << entry.original_lock_ms << "ms→"
                                << color::MINT << std::setw(5) << entry.adjusted_lock_ms << "ms" << color::MUTED << " │ ";
 
                         if (entry.delay_reduced_ms > 0) {
@@ -727,7 +747,7 @@ std::string UiRenderer::render_snapshot_to_string(int width, int height) const {
                         row_ss << color::MUTED << entry.timestamp_str << "│"
                                << color::TEXT << "#" << std::setw(4) << std::setfill('0') << entry.index << std::setfill(' ') << color::MUTED << "│"
                                << color::TARGET << "0x" << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << entry.action_id << std::setfill(' ') << std::dec << color::MUTED << "│"
-                               << color::TEXT << std::fixed << std::setprecision(1) << std::setw(5) << entry.original_lock_ms << "m➔"
+                               << color::TEXT << std::fixed << std::setprecision(1) << std::setw(5) << entry.original_lock_ms << "m→"
                                << color::MINT << std::setw(5) << entry.adjusted_lock_ms << "m" << color::MUTED << "│";
 
                         if (entry.delay_reduced_ms > 0) {
